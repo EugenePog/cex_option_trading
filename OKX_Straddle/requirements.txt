@@ -1,0 +1,5 @@
+python-dotenv
+web3
+pydantic
+asyncio
+python-okx
