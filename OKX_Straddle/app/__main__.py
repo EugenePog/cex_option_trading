@@ -3,12 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, List
 from app.config import configuration
 import os
-from decimal import Decimal
 import asyncio
-import json
-import hmac
-import hashlib
-import time
 import aiohttp
 from web3 import Web3
 from datetime import datetime, timezone
@@ -16,14 +11,15 @@ import okx.PublicData as PublicData
 
 class OKXPositionMonitor:
     def __init__(self):
-        self.api_base_url = str("http://") + str(configuration.API_HOST_IP) + ":" + str(configuration.API_PORT)
-        self.api_key = os.getenv("DEPOSIT_API_KEY")
-        self.api_secret = os.getenv("DEPOSIT_API_SECRET")
-        self.encryption_key = os.getenv("DEPOSIT_ENCRYPTION_KEY")
+        self.api_key = os.getenv("OKX_API_KEY")
+        self.api_secret = os.getenv("OKX_API_SECRET")
+        self.passphrase = os.getenv("OKX_PASSPHRASE")
+        self.flag = os.getenv("OKX_FLAG")
+
         self.check_interval = configuration.API_CHECK_INTERVAL  # seconds
         self.tokens = configuration.LIST_OF_TOKENS
         
-        if not all([self.api_key, self.api_secret, self.encryption_key]):
+        if not all([self.api_key, self.api_secret, self.passphrase]):
             logger.error("Missing API credentials in environment variables")
             raise ValueError("Missing API credentials in environment variables")
         

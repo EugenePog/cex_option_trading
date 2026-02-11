@@ -23,8 +23,6 @@ class Configuration:
 
     _settings = load_settings(SETTINGS_FILE_PATH)
 
-    API_HOST_IP = _settings.get("app_api", {}).get("host", "0.0.0.0")
-    API_PORT = _settings.get("app_api", {}).get("port", "5100")
     API_CHECK_INTERVAL = _settings.get("app_api", {}).get("check_interval", "60")
     
     # Straddle settings
