@@ -143,6 +143,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+OKX_Straddle/.env
 
 # Spyder project settings
 .spyderproject
