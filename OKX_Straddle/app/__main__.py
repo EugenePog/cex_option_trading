@@ -8,11 +8,14 @@ import aiohttp
 from web3 import Web3
 from datetime import datetime, timezone
 import okx.PublicData as PublicData
+import okx.Account as Account
+import okx.Trade as Trade
+from app.functions import parse_positions, check_short_position_balance
 
 class OKXPositionMonitor:
     def __init__(self):
-        self.api_key = os.getenv("OKX_API_KEY")
-        self.api_secret = os.getenv("OKX_API_SECRET")
+        self.api_key = os.getenv("OKX_API_KEY_DEMO")
+        self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
         self.passphrase = os.getenv("OKX_PASSPHRASE")
         self.flag = os.getenv("OKX_FLAG")
 
@@ -27,7 +30,15 @@ class OKXPositionMonitor:
             logger.error("No tokens configured in configuration.list_of_tokens")
             raise ValueError("No tokens configured in configuration.list_of_tokens")
 
-    
+        self.btc_straddle_slippage_tolerance = configuration.BTC_STRADDLE_SLIPPAGE_TOLERANCE
+        self.btc_straddle_amount = configuration.BTC_STRADDLE_AMOUNT
+        self.btc_straddle_timeframe_start = configuration.BTC_STRADDLE_TIMEFRAME_START
+        self.btc_straddle_timeframe_end = configuration.BTC_STRADDLE_TIMEFRAME_END
+        
+        self.btc_put_call_slippage_tolerance = configuration.BTC_PUT_CALL_SLIPPAGE_TOLERANCE
+        self.btc_put_call_amount = configuration.BTC_PUT_CALL_AMOUNT
+        self.btc_put_call_timeframe_start = configuration.BTC_PUT_CALL_TIMEFRAME_START
+        self.btc_put_call_timeframe_end = configuration.BTC_PUT_CALL_TIMEFRAME_END
     
     async def run_monitoring_loop(self):
         """Main monitoring loop that checks positions every interval"""
@@ -71,13 +82,35 @@ class OKXPositionMonitor:
         """Check straddle for a specific token"""
         try:
             logger.info(f"Checking straddle for token: {token}")
-            
-            flag = "1"  # live trading: 0, demo trading: 1
 
-            publicDataAPI = PublicData.PublicAPI(flag = flag)
+            token_uly = token + "-USD"
 
-            result = publicDataAPI.get_instruments(instType = "SWAP")
+            # Get public data
+            #publicDataAPI = PublicData.PublicAPI(flag = self.flag)
+            #result = publicDataAPI.get_instruments(instType = "OPTION", uly = token_uly)
+            #logger.info(result)
+
+            accountAPI = Account.AccountAPI(self.api_key, self.api_secret, self.passphrase, False, self.flag)
+
+            #result = accountAPI.get_account_balance()
+            #logger.info(result)
+
+            result = accountAPI.get_positions(instType="OPTION")
             logger.info(result)
+
+            result_parsed = parse_positions(result, token)
+            logger.info(result_parsed)
+
+            checked_difference = check_short_position_balance(result_parsed)
+            logger.info(f"Check difference in positions: {checked_difference}")
+
+            #tradeAPI = Trade.TradeAPI(self.api_key, self.api_secret, self.passphrase, False, self.flag)
+
+            return {
+                "token": token,
+                "status": "success",
+                "data": str(checked_difference)
+            }
             
         
         except aiohttp.ClientError as e:

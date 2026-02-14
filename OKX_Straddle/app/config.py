@@ -19,17 +19,21 @@ class Configuration:
     LOG_FOLDER = "data/logs/"
     LOG_FILE = "okx_straddle.log"
     SETTINGS_FILE_PATH = "data/settings.json"
-    LIST_OF_TOKENS = ['ETH', 'BTC']
+    LIST_OF_TOKENS = ['BTC', 'ETH']
 
     _settings = load_settings(SETTINGS_FILE_PATH)
 
     API_CHECK_INTERVAL = _settings.get("app_api", {}).get("check_interval", "60")
     
     # Straddle settings
-    SLIPPAGE_TOLERANCE = _settings.get("deposit", {}).get("slippage_tolerance", "0.01")
-    DEPOSIT_AMOUNT_BTC = _settings.get("deposit", {}).get("deposit_amount_btc", "0.00001")
-    DEPOSIT_AMOUNT_ETH = _settings.get("deposit", {}).get("deposit_amount_eth", "0.0001")
-    MAX_SHARE_OF_SPACE = _settings.get("deposit", {}).get("max_share_of_space", "0.3")
-    MAX_SPACE_AGE = _settings.get("deposit", {}).get("acceptable_pool_space_age_seconds", "180")
+    BTC_STRADDLE_SLIPPAGE_TOLERANCE = _settings.get("straddle_btc", {}).get("slippage_tolerance", "0.001")
+    BTC_STRADDLE_AMOUNT = _settings.get("straddle_btc", {}).get("amount", "0.001")
+    BTC_STRADDLE_TIMEFRAME_START = _settings.get("straddle_btc", {}).get("timeframe_start", "8")
+    BTC_STRADDLE_TIMEFRAME_END = _settings.get("straddle_btc", {}).get("timeframe_end", "8")
+    
+    BTC_PUT_CALL_SLIPPAGE_TOLERANCE = _settings.get("put_call_btc", {}).get("slippage_tolerance", "0.001")
+    BTC_PUT_CALL_AMOUNT = _settings.get("put_call_btc", {}).get("amount", "0.001")
+    BTC_PUT_CALL_TIMEFRAME_START = _settings.get("put_call_btc", {}).get("timeframe_start", "8")
+    BTC_PUT_CALL_TIMEFRAME_END = _settings.get("put_call_btc", {}).get("timeframe_end", "8")
 
 configuration = Configuration()
