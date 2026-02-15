@@ -26,14 +26,24 @@ class Configuration:
     API_CHECK_INTERVAL = _settings.get("app_api", {}).get("check_interval", "60")
     
     # Straddle settings
-    BTC_STRADDLE_SLIPPAGE_TOLERANCE = _settings.get("straddle_btc", {}).get("slippage_tolerance", "0.001")
-    BTC_STRADDLE_AMOUNT = _settings.get("straddle_btc", {}).get("amount", "0.001")
-    BTC_STRADDLE_TIMEFRAME_START = _settings.get("straddle_btc", {}).get("timeframe_start", "8")
-    BTC_STRADDLE_TIMEFRAME_END = _settings.get("straddle_btc", {}).get("timeframe_end", "8")
+    STRADDLE_SLIPPAGE_TOLERANCE = {}
+    STRADDLE_AMOUNT = {}
+    STRADDLE_TIMEFRAME_START = {}
+    STRADDLE_TIMEFRAME_END = {}
+    PUT_CALL_SLIPPAGE_TOLERANCE = {}
+    PUT_CALL_AMOUNT = {}
+    PUT_CALL_TIMEFRAME_START = {}
+    PUT_CALL_TIMEFRAME_END = {}
+
+    for token in LIST_OF_TOKENS:
+        STRADDLE_SLIPPAGE_TOLERANCE[token] = _settings.get(f"{token}_straddle", {}).get("slippage_tolerance", "0.001")
+        STRADDLE_AMOUNT[token] = _settings.get(f"{token}_straddle", {}).get("amount", "0.001")
+        STRADDLE_TIMEFRAME_START[token] = _settings.get(f"{token}_straddle", {}).get("timeframe_start", "08:00")
+        STRADDLE_TIMEFRAME_END[token] = _settings.get(f"{token}_straddle", {}).get("timeframe_end", "08:15")
     
-    BTC_PUT_CALL_SLIPPAGE_TOLERANCE = _settings.get("put_call_btc", {}).get("slippage_tolerance", "0.001")
-    BTC_PUT_CALL_AMOUNT = _settings.get("put_call_btc", {}).get("amount", "0.001")
-    BTC_PUT_CALL_TIMEFRAME_START = _settings.get("put_call_btc", {}).get("timeframe_start", "8")
-    BTC_PUT_CALL_TIMEFRAME_END = _settings.get("put_call_btc", {}).get("timeframe_end", "8")
+        PUT_CALL_SLIPPAGE_TOLERANCE[token] = _settings.get(f"{token}_put_call", {}).get("slippage_tolerance", "0.001")
+        PUT_CALL_AMOUNT[token] = _settings.get(f"{token}_put_call", {}).get("amount", "0.001")
+        PUT_CALL_TIMEFRAME_START[token] = _settings.get(f"{token}_put_call", {}).get("timeframe_start", "08:00")
+        PUT_CALL_TIMEFRAME_END[token] = _settings.get(f"{token}_put_call", {}).get("timeframe_end", "08:15")
 
 configuration = Configuration()

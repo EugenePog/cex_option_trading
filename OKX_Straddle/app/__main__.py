@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 import okx.PublicData as PublicData
 import okx.Account as Account
 import okx.Trade as Trade
-from app.functions import parse_positions, check_short_position_balance
+from app.functions import parse_positions, check_short_position_balance, is_within_timeframe
+from app.functions_option import get_otm_next_expiry, open_short_strangle
 
 class OKXPositionMonitor:
     def __init__(self):
@@ -30,44 +31,76 @@ class OKXPositionMonitor:
             logger.error("No tokens configured in configuration.list_of_tokens")
             raise ValueError("No tokens configured in configuration.list_of_tokens")
 
-        self.btc_straddle_slippage_tolerance = configuration.BTC_STRADDLE_SLIPPAGE_TOLERANCE
-        self.btc_straddle_amount = configuration.BTC_STRADDLE_AMOUNT
-        self.btc_straddle_timeframe_start = configuration.BTC_STRADDLE_TIMEFRAME_START
-        self.btc_straddle_timeframe_end = configuration.BTC_STRADDLE_TIMEFRAME_END
+        self.straddle_slippage_tolerance = configuration.STRADDLE_SLIPPAGE_TOLERANCE
+        self.straddle_amount = configuration.STRADDLE_AMOUNT
+        self.straddle_timeframe_start = configuration.STRADDLE_TIMEFRAME_START
+        self.straddle_timeframe_end = configuration.STRADDLE_TIMEFRAME_END
         
-        self.btc_put_call_slippage_tolerance = configuration.BTC_PUT_CALL_SLIPPAGE_TOLERANCE
-        self.btc_put_call_amount = configuration.BTC_PUT_CALL_AMOUNT
-        self.btc_put_call_timeframe_start = configuration.BTC_PUT_CALL_TIMEFRAME_START
-        self.btc_put_call_timeframe_end = configuration.BTC_PUT_CALL_TIMEFRAME_END
+        self.put_call_slippage_tolerance = configuration.PUT_CALL_SLIPPAGE_TOLERANCE
+        self.put_call_amount = configuration.PUT_CALL_AMOUNT
+        self.put_call_timeframe_start = configuration.PUT_CALL_TIMEFRAME_START
+        self.put_call_timeframe_end = configuration.PUT_CALL_TIMEFRAME_END
     
     async def run_monitoring_loop(self):
         """Main monitoring loop that checks positions every interval"""
-        logger.info(f"Starting {configuration.PROJECT_NAME} for tokens: {', '.join(self.tokens)}")
+        logger.info(f"Starting {configuration.PROJECT_NAME} for tokens: {', '.join(self.tokens)}, time: {datetime.now(timezone.utc).replace(microsecond=0)}")
         logger.info(f"Check interval: {self.check_interval} seconds")
 
         while True:
             try:
-                # Check straddles for all tokens in the list
-                tasks = [self.check_straddle_one_token(token) for token in self.tokens]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # Handle any exceptions that occurred
-                processed_results = []
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Exception for token {self.tokens[i]}: {result}")
-                        processed_results.append({
-                            "token": self.tokens[i],
-                            "status": "exception",
-                            "data": str(result)
-                        })
-                    else:
-                        processed_results.append(result)
+                # Loop over tokens in the list
+                for token in self.tokens:
+                    logger.info(f"Checking loop for token: {token}, time: {datetime.now(timezone.utc).replace(microsecond=0)}")
 
-                logger.info(f"Result of the check iteration: {processed_results}")
+                    # Check if there is enought liquidity
+                    # Add liquidity if needed 
+                    
+                    # It is the time is for opening straddle position
+                    logger.info(f"Checking conditions for opening straddle positions for token {token}")
+                    if is_within_timeframe(self.straddle_timeframe_start[token], self.straddle_timeframe_end[token]):
+                        logger.info(f"Execute opening straddle positions for token {token}")
+                        
+                        # Calculate positions to be opened
+                        closest_call = get_otm_next_expiry(self.api_key, self.api_secret, self.passphrase, self.flag, token, "CALL")
+                        logger.info(f"Closest CALL: {closest_call}")
+                        closest_put = get_otm_next_expiry(self.api_key, self.api_secret, self.passphrase, self.flag, token, "PUT")
+                        logger.info(f"Closest PUT: {closest_put}")
+                        
+                        # Check straddles for all tokens in the list
+                        tasks = [self.check_straddle_one_token(token)]
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                        # Handle any exceptions that occurred
+                        processed_results = []
+                        for result in results:
+                            if isinstance(result, Exception):
+                                logger.error(f"Exception for token {token}: {result}")
+                                processed_results.append({
+                                    "token": token,
+                                    "status": "exception",
+                                    "data": str(result)
+                                })
+                            else:
+                                processed_results.append(result)
 
-                # Process straddles for tokens with available space
-                # await self.process_straddles(processed_results)
+                        logger.info(f"Result of the check iteration for token {token}: {processed_results}")
+
+                        # Calculate delta to open straddle positions
+
+                        # Open straddles for tokens with available space
+                        short_strangle_result = open_short_strangle(
+                            closest_call["instId"],
+                            closest_put["instId"],
+                            int(self.straddle_amount[token] * 100),
+                            self.api_key, 
+                            self.api_secret, 
+                            self.passphrase, 
+                            self.flag)
+
+                    # It is the time for opening put call position
+                    logger.info(f"Checking conditions for opening put call positions for token {token}")
+                    if is_within_timeframe(self.put_call_timeframe_start[token], self.put_call_timeframe_end[token]):
+                        logger.info(f"Execute opening put call positions for token {token}")
 
                 # Wait for next iteration
                 await asyncio.sleep(self.check_interval)
@@ -96,7 +129,7 @@ class OKXPositionMonitor:
             #logger.info(result)
 
             result = accountAPI.get_positions(instType="OPTION")
-            logger.info(result)
+            #logger.info(result)
 
             result_parsed = parse_positions(result, token)
             logger.info(result_parsed)
@@ -120,49 +153,6 @@ class OKXPositionMonitor:
             logger.error(f"Unexpected error for {token}: {e}")
             return {"token": token, "status": "error", "data": str(e)}
         
-    async def process_straddles(self, results: List[Dict]):
-        """Process straddles for tokens with identified available space"""
-        deposit_tasks = []
-        
-        for result in results:
-            # Check conditions: 
-            #   status = 'success' 
-            #   and data.status = 'success' 
-            #   and data.available_space > 0
-            #   and timestamp not very old (< API_SPACE_AGE)
-            if (result.get("status") == "success" and 
-                result.get("data") and 
-                result["data"].get("status") == "success" and 
-                result["data"].get("available_space", 0) > 0):
-                
-                token = result["data"]["token"]
-                available_space = result["data"]["available_space"]
-
-                # Parse the ISO format timestamp
-                data_timestamp = datetime.fromisoformat(str(result["data"]["timestamp"]).replace('Z', '+00:00'))
-                current_timestamp = datetime.now(timezone.utc)
-                
-                # Calculate age in seconds
-                age_seconds = (current_timestamp - data_timestamp).total_seconds()
-                
-                if age_seconds < configuration.MAX_SPACE_AGE:
-                    logger.info(f"Available space detected for {token}: {available_space}")
-                    deposit_tasks.append(self.deposit_endpoint(token, available_space))
-                else:
-                    logger.info(f"Available space detected for {token}: {available_space} but it is too old: {age_seconds}")
-        
-        if deposit_tasks:
-            logger.info(f"Executing {len(deposit_tasks)} deposit operations")
-            deposit_results = await asyncio.gather(*deposit_tasks, return_exceptions=True)
-            
-            # Log deposit results
-            for i, deposit_result in enumerate(deposit_results):
-                if isinstance(deposit_result, Exception):
-                    logger.error(f"Deposit failed with exception: {deposit_result}")
-                else:
-                    logger.info(f"Deposit result: {deposit_result}")
-        else:
-            logger.info("No deposits needed - all pools are full or unavailable")
 
 async def main():
     """Main entry point"""
