@@ -195,10 +195,11 @@ def round_to_tick(price: float, tick_size: float = 0.0001) -> str:
     return f"{rounded:.4f}"
 
 
-def open_short_strangle(
+def open_short_straddle(
         call_instId:  str,
         put_instId:   str,
-        size:         int,
+        size_call:    int,
+        size_put:     int,
         api_key:      str,
         secret_key:   str,
         passphrase:   str,
@@ -211,7 +212,8 @@ def open_short_strangle(
     Args:
         call_instId : instrument ID of the call  e.g. "BTC-USD-260215-69500-C"
         put_instId  : instrument ID of the put   e.g. "BTC-USD-260215-69500-P"
-        size        : number of contracts to short on each leg
+        size_call   : number of contracts to short on call leg
+        size_put    : number of contracts to short on put leg
         api_key     : OKX API key
         secret_key  : OKX secret key
         passphrase  : OKX passphrase
@@ -267,7 +269,7 @@ def open_short_strangle(
             "tdMode":  "isolated",
             "side":    "sell",
             "ordType": "limit",             # ✅ options require limit orders
-            "sz":      str(size),
+            "sz":      str(size_call),
             "px":      call_limit_px       # ✅ price required for limit orders
         },
         {
@@ -275,7 +277,7 @@ def open_short_strangle(
             "tdMode":  "isolated",
             "side":    "sell",
             "ordType": "limit",
-            "sz":      str(size),
+            "sz":      str(size_put),
             "px":      put_limit_px
         }
     ]
@@ -327,3 +329,240 @@ def open_short_strangle(
             "call":   None,
             "put":    None
         }
+
+def close_all_open_options(
+        api_key:    str,
+        secret_key: str,
+        passphrase: str,
+        flag:       str,
+        token:      str
+) -> dict:
+    """
+    Cancel all open option orders for a given token and instrument type.
+
+    Args:
+        token     : "BTC", "ETH" etc — filters by instId prefix
+
+    Returns:
+        dict with cancelled and failed order lists
+    """
+
+    tradeAPI = Trade.TradeAPI(
+        api_key=api_key,
+        api_secret_key=secret_key,
+        passphrase=passphrase,
+        use_server_time=False,
+        flag=flag
+    )
+
+    # ----------------------------------------------------------------
+    # Step 1: Fetch all open orders
+    # ----------------------------------------------------------------
+    response = tradeAPI.get_order_list(instType="OPTION")
+
+    if response.get("code") != "0":
+        raise ValueError(f"Failed to fetch open orders: {response.get('msg')}")
+
+    all_orders = response.get("data", [])
+
+    if not all_orders:
+        logger.info("No open orders found.")
+        return {"status": "ok", "cancelled": [], "failed": []}
+
+    # ----------------------------------------------------------------
+    # Step 2: Filter by token
+    # ----------------------------------------------------------------
+    if token:
+        orders_to_cancel = [
+            o for o in all_orders
+            if o.get("instId", "").startswith(f"{token.upper()}-")
+        ]
+        logger.info(f"Open option orders for {token} found and will be cancelled: {len(orders_to_cancel)}")
+    else:
+        orders_to_cancel = all_orders
+
+    if not orders_to_cancel:
+        logger.info(f"No open orders found for token {token}.")
+        return {"status": "ok", "cancelled": [], "failed": []}
+
+    # ----------------------------------------------------------------
+    # Step 3: Build cancel request list
+    # ----------------------------------------------------------------
+    cancel_requests = [
+        {
+            "instId": o.get("instId"),
+            "ordId":  o.get("ordId")
+        }
+        for o in orders_to_cancel
+    ]
+
+    # ----------------------------------------------------------------
+    # Step 4: Cancel in batches of 20 (OKX batch cancel limit)
+    # ----------------------------------------------------------------
+    cancelled = []
+    failed    = []
+    batch_size = 20
+
+    for i in range(0, len(cancel_requests), batch_size):
+        batch    = cancel_requests[i : i + batch_size]
+        response = tradeAPI.cancel_multiple_orders(batch)
+
+        if response.get("code") != "0":
+            logger.error(f"Batch cancel error: {response.get('msg')}")
+            failed.extend(batch)
+            continue
+
+        for res in response.get("data", []):
+            if res.get("sCode") == "0":
+                logger.info(f"Cancelled — ordId: {res.get('ordId')}  instId: {res.get('instId')}")
+                cancelled.append({
+                    "ordId":  res.get("ordId"),
+                    "instId": res.get("instId")
+                })
+            else:
+                logger.info(f"Failed to cancel — ordId: {res.get('ordId')}  reason: {res.get('sMsg')}")
+                failed.append({
+                    "ordId":  res.get("ordId"),
+                    "instId": res.get("instId"),
+                    "reason": res.get("sMsg")
+                })
+
+    return {
+        "status":    "ok" if not failed else "partial",
+        "cancelled": cancelled,
+        "failed":    failed
+    }
+
+def get_short_option_summary(
+        api_key:    str,
+        secret_key: str,
+        passphrase: str,
+        flag:       str,
+        token:      str
+) -> dict:
+    """
+    Get current open short option positions for a given token
+    and return a structured summary.
+
+    Args:
+        api_key    : OKX API key
+        secret_key : OKX secret key
+        passphrase : OKX passphrase
+        token      : token to filter  e.g. "BTC", "ETH"
+        flag       : "0" live, "1" demo
+
+    Returns:
+        {
+            "total_short_calls" : int,
+            "total_short_puts"  : int,
+            "lagging_side"      : str | None,
+            "difference"        : int,
+            "open_positions"    : [{"instrument": str, "size": int}]
+        }
+    """
+
+    # ----------------------------------------------------------------
+    # Step 1: Initialize API
+    # ----------------------------------------------------------------
+    import okx.Account as Account
+
+    accountAPI = Account.AccountAPI(
+        api_key=api_key,
+        api_secret_key=secret_key,
+        passphrase=passphrase,
+        use_server_time=False,
+        flag=flag
+    )
+
+    # ----------------------------------------------------------------
+    # Step 2: Fetch positions
+    # ----------------------------------------------------------------
+    try:
+        response = accountAPI.get_positions(instType="OPTION")
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch positions: {e}")
+
+    # ----------------------------------------------------------------
+    # Step 3: Validate response
+    # ----------------------------------------------------------------
+    if response is None:
+        raise RuntimeError("API returned None response")
+
+    if response.get("code") != "0":
+        raise RuntimeError(f"API error: {response.get('msg')}")
+
+    all_positions = response.get("data", [])
+
+    # ----------------------------------------------------------------
+    # Step 4: Filter — token + short + valid size
+    # ----------------------------------------------------------------
+    short_positions = []
+
+    for pos in all_positions:
+
+        inst_id = pos.get("instId", "")
+        raw_pos = pos.get("pos", "")
+
+        # filter by token prefix
+        if not inst_id.startswith(f"{token.upper()}-"):
+            continue
+
+        # skip empty or missing pos
+        if raw_pos == "" or raw_pos is None:
+            continue
+
+        # parse size
+        try:
+            pos_size = int(float(raw_pos))
+        except (ValueError, TypeError):
+            continue
+
+        # skip zero
+        if pos_size == 0:
+            continue
+
+        # short only (negative pos)
+        if pos_size >= 0:
+            continue
+
+        short_positions.append({
+            "instrument": inst_id,
+            "size":       abs(pos_size)
+        })
+
+    # ----------------------------------------------------------------
+    # Step 5: Separate calls and puts
+    # ----------------------------------------------------------------
+    short_calls = [p for p in short_positions if p["instrument"].endswith("-C")]
+    short_puts  = [p for p in short_positions if p["instrument"].endswith("-P")]
+
+    total_short_calls = sum(p["size"] for p in short_calls)
+    total_short_puts  = sum(p["size"] for p in short_puts)
+
+    # ----------------------------------------------------------------
+    # Step 6: Determine lagging side and difference
+    # ----------------------------------------------------------------
+    if total_short_calls == total_short_puts:
+        lagging_side = None
+        difference   = 0
+
+    elif total_short_calls < total_short_puts:
+        lagging_side = "CALL"
+        difference   = total_short_puts - total_short_calls
+
+    else:
+        lagging_side = "PUT"
+        difference   = total_short_calls - total_short_puts
+
+    # ----------------------------------------------------------------
+    # Step 7: Build result
+    # ----------------------------------------------------------------
+    result = {
+        "total_short_calls": total_short_calls,
+        "total_short_puts":  total_short_puts,
+        "lagging_side":      lagging_side,
+        "difference":        difference,
+        "open_positions":    short_positions
+    }
+
+    return result

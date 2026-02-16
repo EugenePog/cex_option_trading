@@ -10,10 +10,10 @@ from datetime import datetime, timezone
 import okx.PublicData as PublicData
 import okx.Account as Account
 import okx.Trade as Trade
-from app.functions import parse_positions, check_short_position_balance, is_within_timeframe
-from app.functions_option import get_otm_next_expiry, open_short_strangle
+from app.functions import is_within_timeframe
+from app.functions_option import get_otm_next_expiry, open_short_straddle, close_all_open_options, get_short_option_summary
 
-class OKXPositionMonitor:
+class PositionMonitor:
     def __init__(self):
         self.api_key = os.getenv("OKX_API_KEY_DEMO")
         self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
@@ -40,6 +40,8 @@ class OKXPositionMonitor:
         self.put_call_amount = configuration.PUT_CALL_AMOUNT
         self.put_call_timeframe_start = configuration.PUT_CALL_TIMEFRAME_START
         self.put_call_timeframe_end = configuration.PUT_CALL_TIMEFRAME_END
+
+        self.okx_position_size_multiplier = configuration.OKX_POSITION_SIZE_MULTIPLIER
     
     async def run_monitoring_loop(self):
         """Main monitoring loop that checks positions every interval"""
@@ -54,44 +56,74 @@ class OKXPositionMonitor:
 
                     # Check if there is enought liquidity
                     # Add liquidity if needed 
+                    # !!! To be developed
                     
-                    # It is the time is for opening straddle position
+                    # Check time slot for opening short straddle position
                     logger.info(f"Checking conditions for opening straddle positions for token {token}")
                     if is_within_timeframe(self.straddle_timeframe_start[token], self.straddle_timeframe_end[token]):
-                        logger.info(f"Execute opening straddle positions for token {token}")
+                        logger.info(f"Process straddle positions for token {token}")
                         
-                        # Calculate positions to be opened
-                        closest_call = get_otm_next_expiry(self.api_key, self.api_secret, self.passphrase, self.flag, token, "CALL")
+                        # Close all unexecuted orders
+                        logger.info(f"Close all unexecuted orders for token {token} if exist (will be reopenned with updated limit price)")
+                        attempt = 0
+                        while attempt < 10:
+                            attempt += 1
+                            close_all_open_options_response = close_all_open_options(
+                                self.api_key, 
+                                self.api_secret, 
+                                self.passphrase, 
+                                self.flag, 
+                                token)
+                            if close_all_open_options_response.get("status") == "ok":
+                                logger.info(f"All orders closed successfully on attempt {attempt}.")
+                                break
+
+                        # Calculate position sizes to be opened to fill the required size
+                        logger.info(f"Calculate position sizes for token {token} to be openned")
+                        
+                        # Get position size from settings
+                        straddle_call_size = int(self.straddle_amount[token] * self.okx_position_size_multiplier[token])
+                        straddle_put_size = int(self.straddle_amount[token] * self.okx_position_size_multiplier[token])
+
+                        short_option_summary_result = get_short_option_summary(
+                            self.api_key, 
+                            self.api_secret, 
+                            self.passphrase, 
+                            self.flag, 
+                            token)
+
+                        logger.info(f"Result of the check open straddle legs for token {token}: {short_option_summary_result}")
+
+                        # Calculate legs size to open
+                        straddle_call_size_to_open = straddle_call_size - short_option_summary_result['total_short_calls']
+                        straddle_put_size_to_open = straddle_put_size - short_option_summary_result['total_short_puts']
+                        logger.info(f"Straddle position {token}. Calls: Plan - {straddle_call_size}, Openned - {short_option_summary_result['total_short_calls']}, To_open - {straddle_call_size_to_open}")
+                        logger.info(f"Straddle position {token}. Puts: Plan - {straddle_put_size}, Openned - {short_option_summary_result['total_short_puts']}, To_open - {straddle_put_size_to_open}")
+                        
+                        # Define put call IDs for positions to be opened
+                        closest_call = get_otm_next_expiry(
+                            self.api_key, 
+                            self.api_secret, 
+                            self.passphrase, 
+                            self.flag, 
+                            token, 
+                            "CALL")
                         logger.info(f"Closest CALL: {closest_call}")
-                        closest_put = get_otm_next_expiry(self.api_key, self.api_secret, self.passphrase, self.flag, token, "PUT")
+                        closest_put = get_otm_next_expiry(
+                            self.api_key, 
+                            self.api_secret, 
+                            self.passphrase, 
+                            self.flag, 
+                            token, 
+                            "PUT")
                         logger.info(f"Closest PUT: {closest_put}")
-                        
-                        # Check straddles for all tokens in the list
-                        tasks = [self.check_straddle_one_token(token)]
-                        results = await asyncio.gather(*tasks, return_exceptions=True)
-                    
-                        # Handle any exceptions that occurred
-                        processed_results = []
-                        for result in results:
-                            if isinstance(result, Exception):
-                                logger.error(f"Exception for token {token}: {result}")
-                                processed_results.append({
-                                    "token": token,
-                                    "status": "exception",
-                                    "data": str(result)
-                                })
-                            else:
-                                processed_results.append(result)
-
-                        logger.info(f"Result of the check iteration for token {token}: {processed_results}")
-
-                        # Calculate delta to open straddle positions
 
                         # Open straddles for tokens with available space
-                        short_strangle_result = open_short_strangle(
+                        short_straddle_result = open_short_straddle(
                             closest_call["instId"],
                             closest_put["instId"],
-                            int(self.straddle_amount[token] * 100),
+                            straddle_call_size_to_open,
+                            straddle_put_size_to_open,
                             self.api_key, 
                             self.api_secret, 
                             self.passphrase, 
@@ -111,52 +143,11 @@ class OKXPositionMonitor:
                 await asyncio.sleep(self.check_interval)
 
 
-    async def check_straddle_one_token(self, token: str) -> Dict:
-        """Check straddle for a specific token"""
-        try:
-            logger.info(f"Checking straddle for token: {token}")
-
-            token_uly = token + "-USD"
-
-            # Get public data
-            #publicDataAPI = PublicData.PublicAPI(flag = self.flag)
-            #result = publicDataAPI.get_instruments(instType = "OPTION", uly = token_uly)
-            #logger.info(result)
-
-            accountAPI = Account.AccountAPI(self.api_key, self.api_secret, self.passphrase, False, self.flag)
-
-            #result = accountAPI.get_account_balance()
-            #logger.info(result)
-
-            result = accountAPI.get_positions(instType="OPTION")
-            #logger.info(result)
-
-            result_parsed = parse_positions(result, token)
-            logger.info(result_parsed)
-
-            checked_difference = check_short_position_balance(result_parsed)
-            logger.info(f"Check difference in positions: {checked_difference}")
-
-            #tradeAPI = Trade.TradeAPI(self.api_key, self.api_secret, self.passphrase, False, self.flag)
-
-            return {
-                "token": token,
-                "status": "success",
-                "data": str(checked_difference)
-            }
-            
-        
-        except aiohttp.ClientError as e:
-            logger.error(f"HTTP request error for {token}: {e}")
-            return {"token": token, "status": "connection_error", "data": str(e)}
-        except Exception as e:
-            logger.error(f"Unexpected error for {token}: {e}")
-            return {"token": token, "status": "error", "data": str(e)}
         
 
 async def main():
     """Main entry point"""
-    position_monitor = OKXPositionMonitor()
+    position_monitor = PositionMonitor()
     await position_monitor.run_monitoring_loop()
 
 if __name__ == "__main__":
