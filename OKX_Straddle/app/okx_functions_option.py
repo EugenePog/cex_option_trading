@@ -11,7 +11,8 @@ def get_otm_next_expiry(
         passphrase:  str,
         flag:        str,
         token:       str,
-        option_type: str
+        option_type: str,
+        indent:      float = 0.0
 ) -> dict | None:
     """
     Find the closest OTM option expiring tomorrow.
@@ -95,7 +96,7 @@ def get_otm_next_expiry(
     # ----------------------------------------------------------------
     otm_calls = [
         inst for inst in calls_tomorrow
-        if float(inst["stk"]) > current_price          # OTM = strike > spot
+        if float(inst["stk"]) > current_price + indent         # OTM = strike > spot
     ]
 
     logger.info(f"OTM calls expiring tomorrow: {len(otm_calls)}")
@@ -132,7 +133,7 @@ def get_otm_next_expiry(
     # ----------------------------------------------------------------
     otm_puts = [
         inst for inst in puts_tomorrow
-        if float(inst["stk"]) < current_price          # OTM = strike > spot
+        if float(inst["stk"]) < current_price - indent          # OTM = strike > spot
     ]
 
     logger.info(f"OTM puts expiring tomorrow: {len(otm_puts)}")
@@ -195,7 +196,7 @@ def round_to_tick(price: float, tick_size: float = 0.0001) -> str:
     return f"{rounded:.4f}"
 
 
-def open_short_straddle(
+def open_position(
         call_instId:  str,
         put_instId:   str,
         size_call:    int,
@@ -204,7 +205,8 @@ def open_short_straddle(
         secret_key:   str,
         passphrase:   str,
         flag:         str = "0",
-        slippage:     float = 0.05
+        slippage:     float = 0.05,
+        direction:    str = "SHORT"
 ) -> dict:
     """
     Open short strangle by selling 1 call + 1 put at market price.
@@ -220,6 +222,7 @@ def open_short_straddle(
         flag        : "0" live, "1" demo
         slippage    : how far below mark price to set limit (0.05 = 5% lower)
                       higher = more aggressive fill, lower premium received
+        direction   : "SHORT" or "LONG"
 
     Returns:
         dict with results of both legs
@@ -263,24 +266,46 @@ def open_short_straddle(
     # ----------------------------------------------------------------
     # Step 3: Build order definitions for both legs
     # ----------------------------------------------------------------
-    orders = [
-        {
-            "instId":  call_instId,
-            "tdMode":  "isolated",
-            "side":    "sell",
-            "ordType": "limit",             # ✅ options require limit orders
-            "sz":      str(size_call),
-            "px":      call_limit_px       # ✅ price required for limit orders
-        },
-        {
-            "instId":  put_instId,
-            "tdMode":  "isolated",
-            "side":    "sell",
-            "ordType": "limit",
-            "sz":      str(size_put),
-            "px":      put_limit_px
-        }
-    ]
+    orders = []
+    
+    if direction == "SHORT":
+        orders = [
+            {
+                "instId":  call_instId,
+                "tdMode":  "isolated",
+                "side":    "sell",
+                "ordType": "limit",             # ✅ options require limit orders
+                "sz":      str(size_call),
+                "px":      call_limit_px       # ✅ price required for limit orders
+            },
+            {
+                "instId":  put_instId,
+                "tdMode":  "isolated",
+                "side":    "sell",
+                "ordType": "limit",
+                "sz":      str(size_put),
+                "px":      put_limit_px
+            }
+        ]
+    else:
+        orders = [
+            {
+                "instId":  call_instId,
+                "tdMode":  "isolated",
+                "side":    "buy",
+                "ordType": "limit",             # ✅ options require limit orders
+                "sz":      str(size_call),
+                "px":      call_limit_px       # ✅ price required for limit orders
+            },
+            {
+                "instId":  put_instId,
+                "tdMode":  "isolated",
+                "side":    "buy",
+                "ordType": "limit",
+                "sz":      str(size_put),
+                "px":      put_limit_px
+            }
+        ]        
 
     # ----------------------------------------------------------------
     # Step 4: Place both legs using batch order (atomic, single request)
@@ -338,7 +363,7 @@ def close_all_open_options(
         token:      str
 ) -> dict:
     """
-    Cancel all open option orders for a given token and instrument type.
+    Cancel all open option orders for a given token.
 
     Args:
         token     : "BTC", "ETH" etc — filters by instId prefix
@@ -433,12 +458,13 @@ def close_all_open_options(
         "failed":    failed
     }
 
-def get_short_option_summary(
+def get_option_summary(
         api_key:    str,
         secret_key: str,
         passphrase: str,
         flag:       str,
-        token:      str
+        token:      str,
+        direction:  str
 ) -> dict:
     """
     Get current open short option positions for a given token
@@ -450,11 +476,12 @@ def get_short_option_summary(
         passphrase : OKX passphrase
         token      : token to filter  e.g. "BTC", "ETH"
         flag       : "0" live, "1" demo
+        direction. : "SHORT" or "LONG"
 
     Returns:
         {
-            "total_short_calls" : int,
-            "total_short_puts"  : int,
+            "total_calls" : int,
+            "total_puts"  : int,
             "lagging_side"      : str | None,
             "difference"        : int,
             "open_positions"    : [{"instrument": str, "size": int}]
@@ -497,6 +524,7 @@ def get_short_option_summary(
     # Step 4: Filter — token + short + valid size
     # ----------------------------------------------------------------
     short_positions = []
+    long_positions = []
 
     for pos in all_positions:
 
@@ -521,48 +549,59 @@ def get_short_option_summary(
         if pos_size == 0:
             continue
 
-        # short only (negative pos)
+        # process long only (positive pos)
         if pos_size >= 0:
-            continue
+            long_positions.append({
+                "instrument": inst_id,
+                "size":       abs(pos_size)
+            })
+        # process short only (negative pos)
+        else:
+            short_positions.append({
+                "instrument": inst_id,
+                "size":       abs(pos_size)
+            })
 
-        short_positions.append({
-            "instrument": inst_id,
-            "size":       abs(pos_size)
-        })
+    # Choose long or short to process
+    process_positions = []
+    if direction == "SHORT":
+        process_positions = short_positions
+    else: 
+        process_positions = long_positions
 
     # ----------------------------------------------------------------
     # Step 5: Separate calls and puts
     # ----------------------------------------------------------------
-    short_calls = [p for p in short_positions if p["instrument"].endswith("-C")]
-    short_puts  = [p for p in short_positions if p["instrument"].endswith("-P")]
+    process_calls = [p for p in process_positions if p["instrument"].endswith("-C")]
+    process_puts  = [p for p in process_positions if p["instrument"].endswith("-P")]
 
-    total_short_calls = sum(p["size"] for p in short_calls)
-    total_short_puts  = sum(p["size"] for p in short_puts)
+    total_process_calls = sum(p["size"] for p in process_calls)
+    total_process_puts  = sum(p["size"] for p in process_puts)
 
     # ----------------------------------------------------------------
     # Step 6: Determine lagging side and difference
     # ----------------------------------------------------------------
-    if total_short_calls == total_short_puts:
+    if total_process_calls == total_process_puts:
         lagging_side = None
         difference   = 0
 
-    elif total_short_calls < total_short_puts:
+    elif total_process_calls < total_process_puts:
         lagging_side = "CALL"
-        difference   = total_short_puts - total_short_calls
+        difference   = total_process_puts - total_process_calls
 
     else:
         lagging_side = "PUT"
-        difference   = total_short_calls - total_short_puts
+        difference   = total_process_calls - total_process_puts
 
     # ----------------------------------------------------------------
     # Step 7: Build result
     # ----------------------------------------------------------------
     result = {
-        "total_short_calls": total_short_calls,
-        "total_short_puts":  total_short_puts,
+        "total_calls": total_process_calls,
+        "total_puts":  total_process_puts,
         "lagging_side":      lagging_side,
         "difference":        difference,
-        "open_positions":    short_positions
+        "open_positions":    process_positions
     }
 
     return result

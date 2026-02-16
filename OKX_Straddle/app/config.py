@@ -34,6 +34,7 @@ class Configuration:
     PUT_CALL_AMOUNT = {}
     PUT_CALL_TIMEFRAME_START = {}
     PUT_CALL_TIMEFRAME_END = {}
+    PUT_CALL_INDENT = {}
     OKX_POSITION_SIZE_MULTIPLIER = {}
 
     for token in LIST_OF_TOKENS:
@@ -46,6 +47,7 @@ class Configuration:
         PUT_CALL_AMOUNT[token] = _settings.get(f"{token}_put_call", {}).get("amount", "0.001")
         PUT_CALL_TIMEFRAME_START[token] = _settings.get(f"{token}_put_call", {}).get("timeframe_start", "08:00")
         PUT_CALL_TIMEFRAME_END[token] = _settings.get(f"{token}_put_call", {}).get("timeframe_end", "08:15")
+        PUT_CALL_INDENT[token] = _settings.get(f"{token}_put_call", {}).get("indent_from_current_price", 500) 
 
         OKX_POSITION_SIZE_MULTIPLIER[token] = _settings.get(f"{token}", {}).get("okx_position_size_multiplier", 1)
 
