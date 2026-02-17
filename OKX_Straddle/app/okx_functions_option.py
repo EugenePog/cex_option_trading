@@ -177,11 +177,31 @@ def get_option_mark_price(marketAPI, instId: str) -> float:
     response = marketAPI.get_ticker(instId=instId)
 
     if response.get("code") != "0" or not response.get("data"):
+        logger.error(f"Failed to get ticker for {instId}: {response.get('msg')}")
         raise ValueError(f"Failed to get ticker for {instId}: {response.get('msg')}")
 
-    mark_px = response["data"][0].get("last") or response["data"][0].get("bidPx")
+    data = response["data"][0]
+    logger.info(f"Data price_fields: {data}")
+
+    # --- Price fields in priority order ---
+    # markPx  — theoretical fair value, should be available even with no trades
+    # last    — last traded price, may be 0 if no recent trades
+    # bidPx   — best bid, may be 0 if no liquidity
+    # askPx   — best ask, last resort
+    price_fields = ["markPx", "last", "bidPx", "askPx"]
+
+    mark_px = 0
+
+    for field in price_fields:
+        field_value = data.get(field, "")
+        if field_value and field_value != "" and field_value != "0" and field_value != "0.0":
+            mark_px = float(field_value)
+            if mark_px > 0:
+                logger.info(f"Using {field}={mark_px} for {instId}")
+                return mark_px
 
     if not mark_px or float(mark_px) == 0:
+        logger.error(f"No valid price found for {instId}")
         raise ValueError(f"No valid price found for {instId}")
 
     return float(mark_px)
@@ -195,6 +215,56 @@ def round_to_tick(price: float, tick_size: float = 0.0001) -> str:
     rounded = round(round(price / tick_size) * tick_size, 8)
     return f"{rounded:.4f}"
 
+
+def get_tick_size(publicAPI, instId: str) -> float:
+    """
+    Fetch actual tickSz for a specific option instrument.
+    
+    OKX does not support instId filter on /public/instruments for OPTIONS.
+    Must fetch by underlying (uly) and filter locally.
+    """
+
+    # --- Parse token and uly from instId ---
+    # instId format: BTC-USD-260218-71000-C
+    #                uly = "BTC-USD"
+    try:
+        parts = instId.split("-")       # ["BTC", "USD", "260218", "71000", "C"]
+        uly   = f"{parts[0]}-{parts[1]}"  # "BTC-USD"
+    except IndexError:
+        raise ValueError(f"Cannot parse uly from instId: {instId}")
+
+    # Fetch all instruments for this underlying
+    response = publicAPI.get_instruments(
+        instType="OPTION",
+        uly=uly                         # "BTC-USD" or "ETH-USD"
+    )
+
+    if response.get("code") != "0" or not response.get("data"):
+        raise ValueError(
+            f"Failed to get instruments for uly={uly}: {response.get('msg')}"
+        )
+
+    # Filter locally by exact instId
+    match = next(
+        (inst for inst in response["data"] if inst["instId"] == instId),
+        None
+    )
+
+    if match is None:
+        raise ValueError(
+            f"Instrument {instId} not found in {uly} instruments list. "
+            f"It may be expired or not yet listed."
+        )
+
+    tick_sz = float(match["tickSz"])
+    lot_sz  = float(match["lotSz"])
+    min_sz  = float(match["minSz"])
+
+    logger.info(
+        f"{instId} — tickSz: {tick_sz}  lotSz: {lot_sz}  minSz: {min_sz}"
+    )
+
+    return tick_sz
 
 def open_position(
         call_instId:  str,
@@ -244,6 +314,14 @@ def open_position(
         flag=flag
     )
 
+    publicAPI = PublicData.PublicAPI(
+        api_key=api_key,
+        api_secret_key=secret_key,
+        passphrase=passphrase,
+        use_server_time=False,
+        flag=flag
+    )
+
     # ----------------------------------------------------------------
     # Step 1: Get current mark prices for both legs
     # ----------------------------------------------------------------
@@ -254,13 +332,28 @@ def open_position(
         return {"status": "error", "error": str(e), "call": None, "put": None}
 
     # ----------------------------------------------------------------
-    # Step 2: Set limit prices slightly below mark for faster fill
+    # Step 1.1: Get per-instrument tick sizes
     # ----------------------------------------------------------------
-    call_limit_px = round_to_tick(call_mark_px * (1 - slippage))
-    put_limit_px  = round_to_tick(put_mark_px  * (1 - slippage))
+    try:
+        call_tick_sz = get_tick_size(publicAPI, call_instId)
+        put_tick_sz  = get_tick_size(publicAPI, put_instId)
+    except ValueError as e:
+        return {"status": "error", "error": str(e), "call": None, "put": None}
 
-    logger.info(f"CALL mark: {call_mark_px:.4f} BTC  →  limit: {call_limit_px} BTC")
-    logger.info(f"PUT  mark: {put_mark_px:.4f}  BTC  →  limit: {put_limit_px}  BTC")
+    # ----------------------------------------------------------------
+    # Step 2: Set limit prices slightly below mark for faster fill for "SHORT" and slightly above - for "LONG" opening
+    # ----------------------------------------------------------------
+    call_limit_px = 0
+    put_limit_px = 0
+    if direction == "SHORT":
+        call_limit_px = round_to_tick(call_mark_px * (1 - slippage), call_tick_sz)
+        put_limit_px  = round_to_tick(put_mark_px  * (1 - slippage), put_tick_sz)
+    else:
+        call_limit_px = round_to_tick(call_mark_px * (1 + slippage), call_tick_sz)
+        put_limit_px  = round_to_tick(put_mark_px  * (1 + slippage), put_tick_sz)
+
+    logger.info(f"CALL mark: {call_mark_px:.4f}  →  limit: {call_limit_px}")
+    logger.info(f"PUT  mark: {put_mark_px:.4f}   →  limit: {put_limit_px}")
 
 
     # ----------------------------------------------------------------
@@ -305,7 +398,9 @@ def open_position(
                 "sz":      str(size_put),
                 "px":      put_limit_px
             }
-        ]        
+        ]   
+
+    logger.info(f"Orders to execute: {orders}")     
 
     # ----------------------------------------------------------------
     # Step 4: Place both legs using batch order (atomic, single request)

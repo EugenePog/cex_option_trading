@@ -1,0 +1,37 @@
+{
+  "app_api": {
+    "check_interval": 30
+  },
+  "BTC": {
+    "okx_position_size_multiplier": 100,
+    "straddle_strategy": {
+      "slippage_tolerance": 0.07,
+      "amount": 0.01,
+      "timeframe_start": "08:00",
+      "timeframe_end": "09:00"
+    },
+    "long_put_call_strategy": {
+      "slippage_tolerance": 0.07,
+      "amount": 0.05,
+      "timeframe_start": "16:00",
+      "timeframe_end": "17:00",
+      "indent_from_current_price": 3000
+    }
+  },
+  "ETH": {
+    "okx_position_size_multiplier": 10,
+    "straddle_strategy": {
+      "slippage_tolerance": 0.01,
+      "amount": 0.1,
+      "timeframe_start": "16:00",
+      "timeframe_end": "17:00"
+    },
+    "long_put_call_strategy": {
+      "slippage_tolerance": 0.01,
+      "amount": 0.5,
+      "timeframe_start": "17:00",
+      "timeframe_end": "18:00",
+      "indent_from_current_price": 200
+    }
+  }
+}
