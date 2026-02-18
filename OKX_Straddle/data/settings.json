@@ -6,31 +6,37 @@
     "okx_position_size_multiplier": 100,
     "straddle_strategy": {
       "slippage_tolerance": 0.07,
+      "bid_ask_threshold": 0.1,
       "amount": 0.01,
       "timeframe_start": "08:00",
-      "timeframe_end": "09:00"
+      "timeframe_end": "09:00",
+      "available_strikes": [60000, 61000, 62000, 63000, 64000, 65000, 66000, 67000, 68000, 69000
+                          , 70000, 71000, 72000, 73000, 74000, 75000, 76000, 77000, 78000, 79000]
     },
     "long_put_call_strategy": {
       "slippage_tolerance": 0.07,
+      "bid_ask_threshold": 0.5,
       "amount": 0.05,
       "timeframe_start": "16:00",
-      "timeframe_end": "17:00",
-      "indent_from_current_price": 3000
+      "timeframe_end": "23:00",
+      "indent_from_current_price": 2000
     }
   },
   "ETH": {
     "okx_position_size_multiplier": 10,
     "straddle_strategy": {
-      "slippage_tolerance": 0.01,
+      "slippage_tolerance": 0.07,
+      "bid_ask_threshold": 0.1,
       "amount": 0.1,
-      "timeframe_start": "16:00",
-      "timeframe_end": "17:00"
+      "timeframe_start": "08:00",
+      "timeframe_end": "09:00"
     },
     "long_put_call_strategy": {
-      "slippage_tolerance": 0.01,
+      "slippage_tolerance": 0.07,
+      "bid_ask_threshold": 0.1,
       "amount": 0.5,
-      "timeframe_start": "17:00",
-      "timeframe_end": "18:00",
+      "timeframe_start": "16:00",
+      "timeframe_end": "23:00",
       "indent_from_current_price": 200
     }
   }

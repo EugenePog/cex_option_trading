@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 import okx.MarketData as MarketData
 import okx.PublicData as PublicData
 import okx.Trade as Trade
+from typing import Optional
 
 
 def get_otm_next_expiry(
@@ -169,7 +170,7 @@ def get_otm_next_expiry(
         "otm_pct":       round(distance_pct, 4)
     }
 
-def get_option_mark_price(marketAPI, instId: str) -> float:
+def get_option_mark_price(marketAPI, instId: str, bid_ask_threshold: float) -> float:
     """
     Get current mark price for an option instrument.
     Used to set limit price close to market for immediate fill.
@@ -183,12 +184,40 @@ def get_option_mark_price(marketAPI, instId: str) -> float:
     data = response["data"][0]
     logger.info(f"Data price_fields: {data}")
 
+    # ----------------------------------------------------------------
+    # Helper to safely parse price fields (handles "" and "0")
+    # ----------------------------------------------------------------
+    def safe_float(val) -> Optional[float]:
+        """Convert to float, return None if empty/invalid/zero."""
+        if val is None or val == "" or val == "0":
+            return None
+        try:
+            f = float(val)
+            return f if f > 0 else None
+        except (ValueError, TypeError):
+            return None
+
+    # Check market data for validity: 
+    # 1. bia and ask should not be 0 at the same time
+    # 2. abs(bid - ask price) / max (bid, ask) > bid_ask_threshold
+    bid_px  = safe_float(data.get("bidPx"))
+    ask_px  = safe_float(data.get("askPx"))
+    last_px = safe_float(data.get("last"))
+
+    # Validation 1: Both bid and ask cannot be missing
+    if bid_px is None or ask_px is None:
+        logger.warning(f"No valid bid and ask for {instId} — market may be closed or illiquid")
+        raise ValueError(f"No valid bid/ask price found for {instId}")
+    
+    if abs(bid_px - ask_px) / max(bid_px, ask_px) > bid_ask_threshold:
+        logger.warning(f"No valid price found for {instId}: bid ask difference = {abs(bid_px - ask_px) / max(bid_px, ask_px)} while threshold = {bid_ask_threshold}")
+        raise ValueError(f"No valid price found for {instId}")
+
     # --- Price fields in priority order ---
-    # markPx  — theoretical fair value, should be available even with no trades
-    # last    — last traded price, may be 0 if no recent trades
     # bidPx   — best bid, may be 0 if no liquidity
+    # last    — last traded price, may be 0 if no recent trades
     # askPx   — best ask, last resort
-    price_fields = ["markPx", "last", "bidPx", "askPx"]
+    price_fields = ["bidPx", "last", "askPx"]
 
     mark_px = 0
 
@@ -201,7 +230,7 @@ def get_option_mark_price(marketAPI, instId: str) -> float:
                 return mark_px
 
     if not mark_px or float(mark_px) == 0:
-        logger.error(f"No valid price found for {instId}")
+        logger.info(f"No valid price found for {instId}")
         raise ValueError(f"No valid price found for {instId}")
 
     return float(mark_px)
@@ -267,19 +296,21 @@ def get_tick_size(publicAPI, instId: str) -> float:
     return tick_sz
 
 def open_position(
-        call_instId:  str,
-        put_instId:   str,
-        size_call:    int,
-        size_put:     int,
-        api_key:      str,
-        secret_key:   str,
-        passphrase:   str,
-        flag:         str = "0",
-        slippage:     float = 0.05,
-        direction:    str = "SHORT"
+        call_instId:        str,
+        put_instId:         str,
+        size_call:          int,
+        size_put:           int,
+        api_key:            str,
+        secret_key:         str,
+        passphrase:         str,
+        flag:               str = "0",
+        slippage:           float = 0.05,
+        bid_ask_threshold:  float = 0.5,
+        direction:          str = "SHORT"
 ) -> dict:
     """
-    Open short strangle by selling 1 call + 1 put at market price.
+    Open position by selling/buying 1 call + 1 put at market price, ajusted on threshold.
+    Position is not openning if: 1. price can't be identified or equal 0, 2. abs(bid - ask price) / max (bid, ask) > bid_ask_threshold 
 
     Args:
         call_instId : instrument ID of the call  e.g. "BTC-USD-260215-69500-C"
@@ -292,6 +323,7 @@ def open_position(
         flag        : "0" live, "1" demo
         slippage    : how far below mark price to set limit (0.05 = 5% lower)
                       higher = more aggressive fill, lower premium received
+        bid_ask_threshold: relative threshold for the condition: position is not openning if abs(bid - ask price) / max (bid, ask) > bid_ask_threshold
         direction   : "SHORT" or "LONG"
 
     Returns:
@@ -326,8 +358,8 @@ def open_position(
     # Step 1: Get current mark prices for both legs
     # ----------------------------------------------------------------
     try:
-        call_mark_px = get_option_mark_price(marketAPI, call_instId)
-        put_mark_px  = get_option_mark_price(marketAPI, put_instId)
+        call_mark_px = get_option_mark_price(marketAPI, call_instId, bid_ask_threshold)
+        put_mark_px  = get_option_mark_price(marketAPI, put_instId, bid_ask_threshold)
     except ValueError as e:
         return {"status": "error", "error": str(e), "call": None, "put": None}
 

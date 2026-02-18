@@ -27,10 +27,12 @@ class Configuration:
     
     # Straddle settings
     STRADDLE_SLIPPAGE_TOLERANCE = {}
+    STRADDLE_BID_ASK_THRESHOLD = {}
     STRADDLE_AMOUNT = {}
     STRADDLE_TIMEFRAME_START = {}
     STRADDLE_TIMEFRAME_END = {}
     PUT_CALL_SLIPPAGE_TOLERANCE = {}
+    PUT_CALL_BID_ASK_THRESHOLD = {}
     PUT_CALL_AMOUNT = {}
     PUT_CALL_TIMEFRAME_START = {}
     PUT_CALL_TIMEFRAME_END = {}
@@ -39,11 +41,13 @@ class Configuration:
 
     for token in LIST_OF_TOKENS:
         STRADDLE_SLIPPAGE_TOLERANCE[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("slippage_tolerance", "0.001")
+        STRADDLE_BID_ASK_THRESHOLD[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("bid_ask_threshold", "0.001")
         STRADDLE_AMOUNT[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("amount", "0.001")
         STRADDLE_TIMEFRAME_START[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("timeframe_start", "08:00")
         STRADDLE_TIMEFRAME_END[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("timeframe_end", "08:15")
     
         PUT_CALL_SLIPPAGE_TOLERANCE[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("slippage_tolerance", "0.001")
+        PUT_CALL_BID_ASK_THRESHOLD[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("bid_ask_threshold", "0.001")
         PUT_CALL_AMOUNT[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("amount", "0.001")
         PUT_CALL_TIMEFRAME_START[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("timeframe_start", "08:00")
         PUT_CALL_TIMEFRAME_END[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("timeframe_end", "08:15")

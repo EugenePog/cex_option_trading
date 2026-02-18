@@ -32,11 +32,13 @@ class PositionMonitor:
             raise ValueError("No tokens configured in configuration.list_of_tokens")
 
         self.straddle_slippage_tolerance = configuration.STRADDLE_SLIPPAGE_TOLERANCE
+        self.straddle_bid_ask_threshold = configuration.STRADDLE_BID_ASK_THRESHOLD
         self.straddle_amount = configuration.STRADDLE_AMOUNT
         self.straddle_timeframe_start = configuration.STRADDLE_TIMEFRAME_START
         self.straddle_timeframe_end = configuration.STRADDLE_TIMEFRAME_END
         
         self.put_call_slippage_tolerance = configuration.PUT_CALL_SLIPPAGE_TOLERANCE
+        self.put_call_bid_ask_threshold = configuration.PUT_CALL_BID_ASK_THRESHOLD
         self.put_call_amount = configuration.PUT_CALL_AMOUNT
         self.put_call_timeframe_start = configuration.PUT_CALL_TIMEFRAME_START
         self.put_call_timeframe_end = configuration.PUT_CALL_TIMEFRAME_END
@@ -132,6 +134,7 @@ class PositionMonitor:
                                 self.passphrase, 
                                 self.flag,
                                 self.straddle_slippage_tolerance[token],
+                                self.straddle_bid_ask_threshold[token],
                                 "SHORT")
 
                     # It is the time for opening long put call position
@@ -209,6 +212,7 @@ class PositionMonitor:
                                 self.passphrase, 
                                 self.flag,
                                 self.put_call_slippage_tolerance[token],
+                                self.put_call_bid_ask_threshold[token],
                                 "LONG")
 
                 # Wait for next iteration
