@@ -11,7 +11,7 @@ import okx.PublicData as PublicData
 import okx.Account as Account
 import okx.Trade as Trade
 from app.functions import is_within_timeframe
-from app.okx_functions_option import get_otm_next_expiry, open_position, close_all_open_options, get_option_summary
+from app.okx_functions_option import get_otm_next_expiry, open_position, close_all_open_options, get_option_summary, get_available_near_money_options
 
 class PositionMonitor:
     def __init__(self):
@@ -36,6 +36,7 @@ class PositionMonitor:
         self.straddle_amount = configuration.STRADDLE_AMOUNT
         self.straddle_timeframe_start = configuration.STRADDLE_TIMEFRAME_START
         self.straddle_timeframe_end = configuration.STRADDLE_TIMEFRAME_END
+        self.straddle_allowed_strikes = configuration.STRADDLE_ALLOWED_STRIKES
         
         self.put_call_slippage_tolerance = configuration.PUT_CALL_SLIPPAGE_TOLERANCE
         self.put_call_bid_ask_threshold = configuration.PUT_CALL_BID_ASK_THRESHOLD
@@ -105,21 +106,21 @@ class PositionMonitor:
                         logger.info(f"Straddle position {token}. Puts: Plan - {straddle_put_size}, Openned - {short_option_summary_result['total_puts']}, To_open - {straddle_put_size_to_open}")
                         
                         # Define put call IDs for positions to be opened
-                        closest_call = get_otm_next_expiry(
+                        closest_call_put = get_available_near_money_options(
                             self.api_key, 
                             self.api_secret, 
                             self.passphrase, 
                             self.flag, 
                             token, 
-                            "CALL")
+                            self.straddle_allowed_strikes[token],
+                            1)
+                        
+                        if not closest_call_put["calls"][0] or not closest_call_put["puts"][0]:
+                            logger.error(f"No options found expiring on given date within given strikes list")
+                            raise ValueError(f"No options found expiring on given date within given strikes list")
+                        closest_call = closest_call_put["calls"][0]
+                        closest_put = closest_call_put["puts"][0]
                         logger.info(f"Closest CALL: {closest_call}")
-                        closest_put = get_otm_next_expiry(
-                            self.api_key, 
-                            self.api_secret, 
-                            self.passphrase, 
-                            self.flag, 
-                            token, 
-                            "PUT")
                         logger.info(f"Closest PUT: {closest_put}")
 
                         # Open straddles for tokens with available space

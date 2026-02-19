@@ -170,7 +170,237 @@ def get_otm_next_expiry(
         "otm_pct":       round(distance_pct, 4)
     }
 
-def get_option_mark_price(marketAPI, instId: str, bid_ask_threshold: float) -> float:
+
+def get_available_near_money_options(
+        api_key:           str,
+        api_secret:        str,
+        passphrase:        str,
+        flag:              str,
+        token:             str,
+        available_strikes: list[int],
+        days_ahead:        int = 1
+) -> dict:
+    """
+    Get available put and call options expiring N days ahead, filtered by allowed strikes.
+    
+    Returns both OTM options AND ITM options that are closer to current price
+    than the nearest OTM option in the allowed strikes list.
+
+    Logic:
+        1. Filter all options by expiry date and allowed strikes
+        2. For CALLS:
+           - Find closest OTM call (strike > spot)
+           - Include ALL ITM calls (strike < spot) that are closer than closest OTM
+        3. For PUTS:
+           - Find closest OTM put (strike < spot)
+           - Include ALL ITM puts (strike > spot) that are closer than closest OTM
+        4. Sort by distance ascending
+
+    Args:
+        api_key           : OKX API key
+        api_secret        : OKX secret key
+        passphrase        : OKX passphrase
+        flag              : "0" live, "1" demo
+        token             : "BTC", "ETH", etc.
+        available_strikes : list of allowed strike prices e.g. [60000, 61000, ...]
+        days_ahead        : days from now to expiry (default 1 = tomorrow)
+
+    Returns:
+        {
+            "current_price": float,
+            "expiry":        str,
+            "calls": [
+                {
+                    "instId":       str,
+                    "strike":       float,
+                    "distance":     float,
+                    "distance_pct": float,
+                    "moneyness":    "ITM" or "OTM"
+                },
+                ...
+            ],
+            "puts": [...same structure...]
+        }
+    """
+
+    marketAPI = MarketData.MarketAPI(
+        api_key=api_key,
+        api_secret_key=api_secret,
+        passphrase=passphrase,
+        use_server_time=False,
+        flag=flag
+    )
+
+    publicAPI = PublicData.PublicAPI(
+        api_key=api_key,
+        api_secret_key=api_secret,
+        passphrase=passphrase,
+        use_server_time=False,
+        flag=flag
+    )
+
+    # ----------------------------------------------------------------
+    # Step 1: Get current token index price
+    # ----------------------------------------------------------------
+    ticker = marketAPI.get_index_tickers(instId=f"{token}-USD")
+
+    if ticker.get("code") != "0" or not ticker.get("data"):
+        raise ValueError(f"Failed to get {token} index price: {ticker.get('msg')}")
+
+    current_price = float(ticker["data"][0]["idxPx"])
+    logger.info(f"Current {token} price: ${current_price:,.2f}")
+
+    # ----------------------------------------------------------------
+    # Step 2: Build target expiry string
+    # ----------------------------------------------------------------
+    target_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+    expiry_str  = target_date.strftime("%y%m%d")
+    logger.info(f"Target expiry: {expiry_str} ({target_date.strftime('%Y-%m-%d')})")
+
+    # ----------------------------------------------------------------
+    # Step 3: Get all token option instruments
+    # ----------------------------------------------------------------
+    instruments = publicAPI.get_instruments(
+        instType="OPTION",
+        uly=f"{token}-USD"
+    )
+
+    if instruments.get("code") != "0" or not instruments.get("data"):
+        raise ValueError(f"Failed to get instruments: {instruments.get('msg')}")
+
+    all_instruments = instruments["data"]
+    logger.info(f"Total {token} options fetched: {len(all_instruments)}")
+
+    # ----------------------------------------------------------------
+    # Step 4: Filter — expiring on target date + allowed strikes only
+    # ----------------------------------------------------------------
+    allowed_strike_set = set(available_strikes)
+
+    filtered_instruments = [
+        inst for inst in all_instruments
+        if expiry_str in inst["instId"]
+        and float(inst["stk"]) in allowed_strike_set
+    ]
+
+    logger.info(
+        f"Options expiring on {expiry_str} with allowed strikes: "
+        f"{len(filtered_instruments)}"
+    )
+
+    if not filtered_instruments:
+        logger.warning(
+            f"No options found expiring on {expiry_str} "
+            f"with strikes in {available_strikes}"
+        )
+        return {
+            "current_price": current_price,
+            "expiry":        expiry_str,
+            "calls":         [],
+            "puts":          []
+        }
+
+    # ----------------------------------------------------------------
+    # Step 5: Separate calls and puts, calculate distances
+    # ----------------------------------------------------------------
+    calls_all = []
+    puts_all  = []
+
+    for inst in filtered_instruments:
+        strike       = float(inst["stk"])
+        distance     = abs(strike - current_price)
+        distance_pct = (distance / current_price) * 100
+
+        option_data = {
+            "instId":       inst["instId"],
+            "strike":       strike,
+            "distance":     round(distance, 2),
+            "distance_pct": round(distance_pct, 4),
+        }
+
+        if inst["optType"] == "C":
+            option_data["moneyness"] = "OTM" if strike > current_price else "ITM"
+            calls_all.append(option_data)
+        else:  # "P"
+            option_data["moneyness"] = "OTM" if strike < current_price else "ITM"
+            puts_all.append(option_data)
+
+    logger.info(f"All calls number: {len(calls_all)}, All puts number: {len(puts_all)}")
+
+    # ----------------------------------------------------------------
+    # Step 6: Filter CALLS — OTM + ITM closer than nearest OTM
+    # ----------------------------------------------------------------
+    otm_calls = [c for c in calls_all if c["moneyness"] == "OTM"]
+    itm_calls = [c for c in calls_all if c["moneyness"] == "ITM"]
+
+    if otm_calls:
+        # Find closest OTM call distance
+        closest_otm_call_distance = min(c["distance"] for c in otm_calls)
+        
+        # Include ITM calls that are closer than the closest OTM
+        near_itm_calls = [
+            c for c in itm_calls
+            if c["distance"] < closest_otm_call_distance
+        ]
+        
+        selected_calls = otm_calls + near_itm_calls
+        
+        logger.info(
+            f"CALLS — OTM: {len(otm_calls)}, "
+            f"ITM closer than nearest OTM: {len(near_itm_calls)}"
+        )
+    else:
+        # No OTM calls — include all ITM calls
+        selected_calls = itm_calls
+        logger.info(f"CALLS — No OTM available, including all {len(itm_calls)} ITM")
+
+    # ----------------------------------------------------------------
+    # Step 7: Filter PUTS — OTM + ITM closer than nearest OTM
+    # ----------------------------------------------------------------
+    otm_puts = [p for p in puts_all if p["moneyness"] == "OTM"]
+    itm_puts = [p for p in puts_all if p["moneyness"] == "ITM"]
+
+    if otm_puts:
+        # Find closest OTM put distance
+        closest_otm_put_distance = min(p["distance"] for p in otm_puts)
+        
+        # Include ITM puts that are closer than the closest OTM
+        near_itm_puts = [
+            p for p in itm_puts
+            if p["distance"] < closest_otm_put_distance
+        ]
+        
+        selected_puts = otm_puts + near_itm_puts
+        
+        logger.info(
+            f"PUTS  — OTM: {len(otm_puts)}, "
+            f"ITM closer than nearest OTM: {len(near_itm_puts)}"
+        )
+    else:
+        # No OTM puts — include all ITM puts
+        selected_puts = itm_puts
+        logger.info(f"PUTS  — No OTM available, including all {len(itm_puts)} ITM")
+
+    # ----------------------------------------------------------------
+    # Step 8: Sort by distance ascending (closest first)
+    # ----------------------------------------------------------------
+    calls_sorted = sorted(selected_calls, key=lambda x: x["distance"])
+    puts_sorted  = sorted(selected_puts,  key=lambda x: x["distance"])
+
+    logger.info(
+        f"Final selection — Calls: {len(calls_sorted)}, Puts: {len(puts_sorted)}"
+    )
+
+    # ----------------------------------------------------------------
+    # Step 9: Return structured result
+    # ----------------------------------------------------------------
+    return {
+        "current_price": current_price,
+        "expiry":        expiry_str,
+        "calls":         calls_sorted,
+        "puts":          puts_sorted
+    }
+
+def get_option_mark_price(marketAPI, instId: str, bid_ask_threshold: float, direction: str) -> float:
     """
     Get current mark price for an option instrument.
     Used to set limit price close to market for immediate fill.
@@ -217,7 +447,11 @@ def get_option_mark_price(marketAPI, instId: str, bid_ask_threshold: float) -> f
     # bidPx   — best bid, may be 0 if no liquidity
     # last    — last traded price, may be 0 if no recent trades
     # askPx   — best ask, last resort
-    price_fields = ["bidPx", "last", "askPx"]
+    price_fields = []
+    if direction == "SHORT":
+        price_fields = ["bidPx", "last", "askPx"]
+    else:
+        price_fields = ["askPx", "last", "bidPx"]
 
     mark_px = 0
 
@@ -358,8 +592,8 @@ def open_position(
     # Step 1: Get current mark prices for both legs
     # ----------------------------------------------------------------
     try:
-        call_mark_px = get_option_mark_price(marketAPI, call_instId, bid_ask_threshold)
-        put_mark_px  = get_option_mark_price(marketAPI, put_instId, bid_ask_threshold)
+        call_mark_px = get_option_mark_price(marketAPI, call_instId, bid_ask_threshold, direction)
+        put_mark_px  = get_option_mark_price(marketAPI, put_instId, bid_ask_threshold, direction)
     except ValueError as e:
         return {"status": "error", "error": str(e), "call": None, "put": None}
 
