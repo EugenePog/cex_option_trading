@@ -139,8 +139,9 @@ class PositionMonitor:
                                 "SHORT")
 
                     # It is the time for opening long put call position
-                    logger.info(f"Checking conditions for opening long put call positions for token {token}")
-                    if is_within_timeframe(self.put_call_timeframe_start[token], self.put_call_timeframe_end[token]):
+                    #logger.info(f"Checking conditions for opening long put call positions for token {token}")
+                    #if is_within_timeframe(self.put_call_timeframe_start[token], self.put_call_timeframe_end[token]):
+                    if False:
                         logger.info(f"Process long put call positions for token {token}")
 
                         # Close all unexecuted orders

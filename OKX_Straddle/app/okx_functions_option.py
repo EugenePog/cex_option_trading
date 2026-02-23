@@ -631,7 +631,7 @@ def open_position(
         orders = [
             {
                 "instId":  call_instId,
-                "tdMode":  "isolated",
+                "tdMode":  "cross", #"isolated",
                 "side":    "sell",
                 "ordType": "limit",             # ✅ options require limit orders
                 "sz":      str(size_call),
@@ -639,7 +639,7 @@ def open_position(
             },
             {
                 "instId":  put_instId,
-                "tdMode":  "isolated",
+                "tdMode":  "cross", #"isolated",
                 "side":    "sell",
                 "ordType": "limit",
                 "sz":      str(size_put),
@@ -650,7 +650,7 @@ def open_position(
         orders = [
             {
                 "instId":  call_instId,
-                "tdMode":  "isolated",
+                "tdMode":  "cross", #"isolated",
                 "side":    "buy",
                 "ordType": "limit",             # ✅ options require limit orders
                 "sz":      str(size_call),
@@ -658,7 +658,7 @@ def open_position(
             },
             {
                 "instId":  put_instId,
-                "tdMode":  "isolated",
+                "tdMode":  "cross", #"isolated",
                 "side":    "buy",
                 "ordType": "limit",
                 "sz":      str(size_put),
