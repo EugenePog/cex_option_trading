@@ -15,10 +15,10 @@ from app.okx_functions_option import get_otm_next_expiry, open_position, close_a
 
 class PositionMonitor:
     def __init__(self):
-        self.api_key = os.getenv("OKX_API_KEY_DEMO")
-        self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
-        self.passphrase = os.getenv("OKX_PASSPHRASE")
-        self.flag = os.getenv("OKX_FLAG")
+        self.api_key = os.getenv("OKX_K_API_KEY")
+        self.api_secret = os.getenv("OKX_K_API_SECRET")
+        self.passphrase = os.getenv("OKX_K_PASSPHRASE")
+        self.flag = os.getenv("OKX_K_FLAG")
 
         self.check_interval = configuration.API_CHECK_INTERVAL  # seconds
         self.tokens = configuration.LIST_OF_TOKENS
