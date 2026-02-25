@@ -15,7 +15,7 @@ def load_settings(path: str) -> dict:
         raise RuntimeError(f"Invalid JSON in settings file: {e}")
 
 class Configuration:
-    PROJECT_NAME = "OKX Straddle strategy"
+    PROJECT_NAME = "CEX option strategies"
     LOG_FOLDER = "data/logs/"
     LOG_FILE = "okx_straddle.log"
     SETTINGS_FILE_PATH = "data/settings.json"
