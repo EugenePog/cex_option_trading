@@ -19,6 +19,7 @@ class Configuration:
     LOG_FOLDER = "data/logs/"
     LOG_FILE = "okx_straddle.log"
     SETTINGS_FILE_PATH = "data/settings.json"
+    EXECUTED_ORDERS_PATH = "data/executed_orders.csv"
     LIST_OF_TOKENS = ['BTC']
 
     _settings = load_settings(SETTINGS_FILE_PATH)

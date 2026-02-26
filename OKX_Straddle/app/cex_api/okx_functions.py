@@ -657,47 +657,40 @@ def open_position(
     # Step 3: Build order definitions for both legs
     # ----------------------------------------------------------------
     orders = []
-    
-    if direction == "SHORT":
-        orders = [
-            {
-                "instId":  call_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "sell",
-                "ordType": "limit",             # ✅ options require limit orders
-                "sz":      str(size_call),
-                "px":      call_limit_px       # ✅ price required for limit orders
-            },
-            {
-                "instId":  put_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "sell",
-                "ordType": "limit",
-                "sz":      str(size_put),
-                "px":      put_limit_px
-            }
-        ]
-    else:
-        orders = [
-            {
-                "instId":  call_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "buy",
-                "ordType": "limit",             # ✅ options require limit orders
-                "sz":      str(size_call),
-                "px":      call_limit_px       # ✅ price required for limit orders
-            },
-            {
-                "instId":  put_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "buy",
-                "ordType": "limit",
-                "sz":      str(size_put),
-                "px":      put_limit_px
-            }
-        ]   
+    leg_map = {}  # track which index corresponds to call/put
 
-    logger.info(f"Orders to execute: {orders}")     
+    if direction == "SHORT":
+        side = "sell"
+    else:
+        side = "buy"
+
+    if size_call > 0:
+        leg_map["call"] = len(orders)
+        orders.append({
+            "instId":  call_instId,
+            "tdMode":  "cross",
+            "side":    side,
+            "ordType": "limit",
+            "sz":      str(size_call),
+            "px":      call_limit_px
+        })
+
+    if size_put > 0:
+        leg_map["put"] = len(orders)
+        orders.append({
+            "instId":  put_instId,
+            "tdMode":  "cross",
+            "side":    side,
+            "ordType": "limit",
+            "sz":      str(size_put),
+            "px":      put_limit_px
+        })
+
+    if not orders:
+        logger.info("No legs to open — both sizes are 0")
+        return {"status": "skipped", "call": None, "put": None}
+
+    logger.info(f"Orders to execute: {orders}")  
 
     # ----------------------------------------------------------------
     # Step 4: Place both legs using batch order (atomic, single request)
@@ -710,8 +703,10 @@ def open_position(
             raise ValueError(f"Batch order failed: {response.get('msg')}")
 
         results   = response.get("data", [])
-        call_result = results[0] if len(results) > 0 else {}
-        put_result  = results[1] if len(results) > 1 else {}
+        #call_result = results[0] if len(results) > 0 else {}
+        #put_result  = results[1] if len(results) > 1 else {}
+        call_result = results[leg_map["call"]] if "call" in leg_map else {}
+        put_result  = results[leg_map["put"]]  if "put"  in leg_map else {}
 
         # --- Check individual leg placement results ---
         for leg, res in [("CALL", call_result), ("PUT", put_result)]:
@@ -741,6 +736,12 @@ def open_position(
                 "px":      call_limit_px,
                 "sCode":  call_result.get("sCode"),
                 "sMsg":   call_result.get("sMsg"),
+                # execution result
+                "state":   call_fill.get("state"),
+                "fill_sz": call_fill.get("fillSz"),
+                "avg_px":  call_fill.get("avgPx"),
+                "fee":     call_fill.get("fee"),
+                "fill_time": datetime.fromtimestamp(int(call_fill.get("fillTime", 0)) / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if call_fill.get("fillTime") else None,
             },
             "put": {
                 "instId": put_instId,
@@ -748,6 +749,12 @@ def open_position(
                 "px":      put_limit_px,
                 "sCode":  put_result.get("sCode"),
                 "sMsg":   put_result.get("sMsg"),
+                # execution result
+                "state":   put_fill.get("state"),
+                "fill_sz": put_fill.get("fillSz"),
+                "avg_px":  put_fill.get("avgPx"),
+                "fee":     put_fill.get("fee"),
+                "fill_time": datetime.fromtimestamp(int(put_fill.get("fillTime", 0)) / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if put_fill.get("fillTime") else None,
             }
         }
 

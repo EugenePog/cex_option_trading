@@ -1,5 +1,7 @@
 from app import logger
 from datetime import datetime, time, timezone
+import csv
+import os
 
 def is_within_timeframe(timeframe_start: str, timeframe_end: str) -> bool:
     """
@@ -43,3 +45,39 @@ def is_within_timeframe(timeframe_start: str, timeframe_end: str) -> bool:
           f"{'✅ Inside' if result else '❌ Outside'}")
 
     return result
+
+def save_filled_orders_to_csv(strategy: str, order_result: dict, direction: str, filepath: str):
+    """Save filled legs from order result to CSV file"""
+    
+    fieldnames = ["strategy", "time", "option", "direction", "order_id", "order_price", "avg_fill_price", "fill_size", "fee"]
+    
+    # Check if file exists to write header only once
+    file_exists = os.path.exists(filepath)
+    
+    rows_to_write = []
+    for leg in ["call", "put"]:
+        leg_data = order_result.get(leg, {})
+        if leg_data.get("state") == "filled":
+            rows_to_write.append({
+                "strategy":         strategy,
+                "time":             leg_data.get("fill_time"),
+                "option":           leg_data.get("instId"),
+                "direction":        direction,
+                "order_id":         leg_data.get("ordId"),
+                "order_price":      leg_data.get("px"),
+                "avg_fill_price":   leg_data.get("avg_px"),
+                "fill_size":        leg_data.get("fill_sz"),
+                "fee":              leg_data.get("fee"),
+            })
+
+    if not rows_to_write:
+        logger.info("No filled orders to save")
+        return
+
+    with open(filepath, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerows(rows_to_write)
+
+    logger.info(f"Saved {len(rows_to_write)} filled order(s) to {filepath}")

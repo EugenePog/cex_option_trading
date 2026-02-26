@@ -15,6 +15,7 @@ class StrategyMonitor:
 
         self.check_interval = configuration.API_CHECK_INTERVAL  # seconds
         self.tokens = configuration.LIST_OF_TOKENS
+        self.executed_orders_path = configuration.EXECUTED_ORDERS_PATH
         
         if not all([self.api_key, self.api_secret, self.passphrase]):
             logger.error("Missing API credentials in environment variables")
@@ -57,7 +58,9 @@ class StrategyMonitor:
             "okx_position_size_multiplier": self.okx_position_size_multiplier[token],
             "put_call_timeframe_start": self.put_call_timeframe_start[token],
             "put_call_timeframe_end": self.put_call_timeframe_end[token],
+            "executed_orders_path": self.executed_orders_path,
         }
+
         return [
             StrategyStraddleShort(token, token_config, api_credentials),
             # Add new strategies here

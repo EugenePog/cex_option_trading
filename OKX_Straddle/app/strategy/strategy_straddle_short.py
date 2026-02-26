@@ -3,6 +3,7 @@ from app.strategy.strategy_base import StrategyBase
 import asyncio
 from app import logger
 from app.cex_api.okx_functions import open_position, close_all_open_options, get_option_summary, get_available_near_money_options
+from app.functions import save_filled_orders_to_csv
 
 class StrategyStraddleShort(StrategyBase):
 
@@ -51,7 +52,7 @@ class StrategyStraddleShort(StrategyBase):
         logger.info(f"Closest PUT: {closest_put}")
         
         if call_to_open > 0 or put_to_open > 0:
-            await loop.run_in_executor(
+            position = await loop.run_in_executor(
                 None, open_position,
                 closest_call["instId"], closest_put["instId"],
                 call_to_open, put_to_open,
@@ -60,6 +61,10 @@ class StrategyStraddleShort(StrategyBase):
                 self.config["straddle_bid_ask_threshold"],
                 "SHORT"
             )
+
+            logger.info(f"Openned position: {position}")
+            save_filled_orders_to_csv("StrategyStraddleShort", position, "SHORT", self.config["executed_orders_path"])
+
 
     async def _close_all_open_orders(self):
         loop = asyncio.get_event_loop()

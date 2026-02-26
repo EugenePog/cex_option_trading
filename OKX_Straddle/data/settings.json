@@ -6,8 +6,8 @@
     "okx_position_size_multiplier": 100,
     "straddle_strategy": {
       "slippage_tolerance": 0.00,
-      "bid_ask_threshold": 0.15,
-      "amount": 0.03,
+      "bid_ask_threshold": 0.25,
+      "amount": 0.09,
       "timeframe_start": "08:05",
       "timeframe_end": "22:30",
       "allowed_strikes":  [60000, 60500, 61000, 61500, 62000, 62500, 63000, 63500, 64000, 64500
