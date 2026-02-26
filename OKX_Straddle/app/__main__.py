@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from app.strategy.strategy_base import StrategyBase
 from app.strategy.strategy_straddle_short import StrategyStraddleShort
 
-class PositionMonitor:
+class StrategyMonitor:
     def __init__(self):
         self.api_key = os.getenv("OKX_API_KEY_DEMO")
         self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
@@ -95,8 +95,8 @@ class PositionMonitor:
 
 async def main():
     """Main entry point"""
-    position_monitor = PositionMonitor()
-    await position_monitor.run_monitoring_loop()
+    strategy_monitor = StrategyMonitor()
+    await strategy_monitor.run_monitoring_loop()
 
 if __name__ == "__main__":
     try:

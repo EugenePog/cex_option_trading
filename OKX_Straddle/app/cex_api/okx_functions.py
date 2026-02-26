@@ -4,7 +4,7 @@ import okx.MarketData as MarketData
 import okx.PublicData as PublicData
 import okx.Trade as Trade
 from typing import Optional
-
+import time
 
 def get_otm_next_expiry(
         api_key:     str,
@@ -529,6 +529,37 @@ def get_tick_size(publicAPI, instId: str) -> float:
 
     return tick_sz
 
+
+def get_order_status(tradeAPI, instId: str, ordId: str) -> dict:
+    """Poll order status until filled, cancelled, or timeout"""
+    response = tradeAPI.get_order(instId=instId, ordId=ordId)
+    if response.get("code") != "0":
+        return {}
+    data = response.get("data", [])
+    return data[0] if data else {}
+
+
+def wait_for_fill(tradeAPI, instId: str, ordId: str, timeout: int = 30, interval: int = 2) -> dict:
+    """
+    Poll until order is filled or cancelled.
+    States: live, partially_filled, filled, cancelled, mmp_canceled
+    """
+    elapsed = 0
+    while elapsed < timeout:
+        order = get_order_status(tradeAPI, instId, ordId)
+        state = order.get("state")
+
+        if state in ("filled", "cancelled", "mmp_canceled"):
+            return order
+        
+        logger.info(f"Order {ordId} state: {state}, waiting...")
+        time.sleep(interval)
+        elapsed += interval
+
+    logger.warning(f"Order {ordId} timed out after {timeout}s")
+    return get_order_status(tradeAPI, instId, ordId)  # return last known state
+
+
 def open_position(
         call_instId:        str,
         put_instId:         str,
@@ -682,12 +713,25 @@ def open_position(
         call_result = results[0] if len(results) > 0 else {}
         put_result  = results[1] if len(results) > 1 else {}
 
-        # --- Check individual leg results ---
+        # --- Check individual leg placement results ---
         for leg, res in [("CALL", call_result), ("PUT", put_result)]:
             if res.get("sCode") != "0":
                 logger.info(f"{leg} leg error: {res.get('sMsg')}")
             else:
                 logger.info(f"{leg} leg placed — ordId: {res.get('ordId')}")
+
+        # ----------------------------------------------------------------
+        # Step 5: Poll execution results for both legs
+        # ----------------------------------------------------------------
+        call_fill = wait_for_fill(tradeAPI, call_instId, call_result.get("ordId")) if call_result.get("ordId") else {}
+        put_fill  = wait_for_fill(tradeAPI, put_instId,  put_result.get("ordId"))  if put_result.get("ordId")  else {}
+
+        for leg, fill in [("CALL", call_fill), ("PUT", put_fill)]:
+            logger.info(
+                f"{leg} execution — state: {fill.get('state')}, "
+                f"filled: {fill.get('fillSz')}/{fill.get('sz')}, "
+                f"avg fill px: {fill.get('avgPx')}"
+            )
 
         return {
             "status": "placed",

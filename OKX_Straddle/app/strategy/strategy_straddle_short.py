@@ -68,8 +68,11 @@ class StrategyStraddleShort(StrategyBase):
                 None, close_all_open_options,
                 self.api_key, self.api_secret, self.passphrase, self.flag, self.token
             )
-            if response.get("status") == "ok":
+            if response.get("status") == "ok" and (len(response.get("cancelled", [])) > 0):
                 logger.info(f"[ShortStraddle] Orders closed on attempt {attempt}")
+                return
+            elif response.get("status") == "ok" and (len(response.get("cancelled", [])) == 0):
+                logger.info(f"[ShortStraddle] No orders to close")
                 return
         logger.warning(f"[ShortStraddle] Failed to close orders after 10 attempts")
 
