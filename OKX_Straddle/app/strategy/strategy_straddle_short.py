@@ -40,7 +40,8 @@ class StrategyStraddleShort(StrategyBase):
         closest = await loop.run_in_executor(
             None, get_available_near_money_options,
             self.api_key, self.api_secret, self.passphrase, self.flag,
-            self.token, self.config["straddle_allowed_strikes"], 1
+            self.token, self.config["straddle_allowed_strikes"], 1,
+            "FIXED", "8:00"
         )
 
         if not closest["calls"][0] or not closest["puts"][0]:

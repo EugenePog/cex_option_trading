@@ -171,6 +171,51 @@ def get_otm_next_expiry(
     }
 
 
+def get_token_price(marketAPI, token: str, price_time: str = None) -> float:
+    """
+    Get token index price.
+
+    Args:
+        marketAPI  : OKX MarketAPI instance
+        token      : token symbol e.g. "BTC"
+        price_time : if None - returns current price
+                     if set (e.g. "8:00", "14:30") - returns price at that UTC time today
+
+    Returns:
+        float: token price
+    """
+    if price_time is None:
+        # --- Current price ---
+        ticker = marketAPI.get_index_tickers(instId=f"{token}-USD")
+        if ticker.get("code") != "0" or not ticker.get("data"):
+            raise ValueError(f"Failed to get {token} index price: {ticker.get('msg')}")
+        price = float(ticker["data"][0]["idxPx"])
+        logger.info(f"Current {token} price: ${price:,.2f}")
+
+    else:
+        # --- Price at specific UTC time today ---
+        hour, minute = map(int, price_time.split(":"))
+        target_time = datetime.now(timezone.utc).replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        target_ts = int(target_time.timestamp() * 1000)
+        bar = "1H" if minute == 0 else "1m"
+
+        candles = marketAPI.get_index_candlesticks(
+            instId=f"{token}-USD",
+            bar=bar,
+            after=str(target_ts - 1),
+            limit="1"
+        )
+        if candles.get("code") != "0" or not candles.get("data"):
+            raise ValueError(f"Failed to get {token} price at {price_time} UTC: {candles.get('msg')}")
+
+        price = float(candles["data"][0][4])  # close price
+        logger.info(f"{token} price at {price_time} UTC today: ${price:,.2f}")
+
+    return price
+
+
 def get_available_near_money_options(
         api_key:           str,
         api_secret:        str,
@@ -178,7 +223,9 @@ def get_available_near_money_options(
         flag:              str,
         token:             str,
         available_strikes: list[int],
-        days_ahead:        int = 1
+        days_ahead:        int = 1,
+        price_time_flag:   str = "CURRENT",            #possible values: FIXED, CURRENT
+        price_time:        str = "8:00"                #time HH:MM in UTC
 ) -> dict:
     """
     Get available put and call options expiring N days ahead, filtered by allowed strikes.
@@ -242,13 +289,11 @@ def get_available_near_money_options(
     # ----------------------------------------------------------------
     # Step 1: Get current token index price
     # ----------------------------------------------------------------
-    ticker = marketAPI.get_index_tickers(instId=f"{token}-USD")
-
-    if ticker.get("code") != "0" or not ticker.get("data"):
-        raise ValueError(f"Failed to get {token} index price: {ticker.get('msg')}")
-
-    current_price = float(ticker["data"][0]["idxPx"])
-    logger.info(f"Current {token} price: ${current_price:,.2f}")
+    current_price = None
+    if price_time_flag == "CURRENT":
+        current_price = get_token_price(marketAPI, token)
+    elif price_time_flag == "FIXED":
+        current_price = get_token_price(marketAPI, token, price_time)
 
     # ----------------------------------------------------------------
     # Step 2: Build target expiry string
