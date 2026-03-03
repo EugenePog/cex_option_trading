@@ -42,7 +42,7 @@ def get_cross_margin_level(api_key: str, api_secret: str, passphrase: str, flag:
     }
 
 
-def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag: str, threshold: float) -> dict:
+def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag: str, threshold_yellow: float,  threshold_red: float) -> dict:
     """
     Check if cross margin ratio is above given threshold.
 
@@ -54,16 +54,17 @@ def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag:
         dict with margin status and whether it's safe
     """
     margin = get_cross_margin_level(api_key, api_secret, passphrase, flag)
-    margin_ratio = margin["margin_ratio"]
+    margin_ratio = float(margin["margin_ratio"])
 
-    is_safe    = margin_ratio >= threshold
-    is_warning = threshold > margin_ratio >= threshold * 0.8   # within 20% of threshold
+    is_safe    = margin_ratio >= threshold_yellow
+    is_warning = threshold_yellow > margin_ratio >= threshold_red
     
     status = "SAFE" if is_safe else ("WARNING" if is_warning else "CRITICAL")
 
     logger.info(
         f"Margin ratio: {margin_ratio:.4f} | "
-        f"Threshold: {threshold:.4f} | "
+        f"Threshold_yellow: {threshold_yellow:.4f} | "
+        f"Threshold_red: {threshold_red:.4f} | "
         f"MMR: ${margin['mmr']:,.2f} | "
         f"Adjusted Equity: ${margin['adjusted_equity']:,.2f} | "
         f"Status: {status}"
@@ -71,34 +72,5 @@ def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag:
 
     return {
         **margin,
-        "threshold":   threshold,
-        "is_safe":     is_safe,
-        "is_warning":  is_warning,
-        "status":      status,                  # SAFE / WARNING / CRITICAL
-        "gap":         round(margin_ratio - threshold, 4),  # how far above/below threshold
+        "status":      status                  # SAFE / WARNING / CRITICAL
     }
-
-
-# Usage
-if __name__ == "__main__":
-    result = check_margin_threshold(
-        api_key=API_KEY,
-        api_secret=API_SECRET,
-        passphrase=PASSPHRASE,
-        flag=FLAG,
-        threshold=2.0       # require margin ratio to be at least 2x maintenance margin
-    )
-
-    print(f"\nMargin Status:    {result['status']}")
-    print(f"Margin Ratio:     {result['margin_ratio']:.4f}")
-    print(f"Threshold:        {result['threshold']:.4f}")
-    print(f"Gap to threshold: {result['gap']:.4f}")
-    print(f"Total Equity:     ${result['total_equity_usd']:,.2f}")
-    print(f"Adjusted Equity:  ${result['adjusted_equity']:,.2f}")
-    print(f"IMR:              ${result['imr']:,.2f}")
-    print(f"MMR:              ${result['mmr']:,.2f}")
-```
-
-**Key field — `margin_ratio` on OKX is:**
-```
-margin_ratio = adjusted_equity / mmr

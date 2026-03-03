@@ -25,6 +25,10 @@ class Configuration:
     _settings = load_settings(SETTINGS_FILE_PATH)
 
     API_CHECK_INTERVAL = _settings.get("app_api", {}).get("check_interval", "60")
+
+    # Thresholds for the margin monitoring
+    MARGIN_THRESHOLD_YELLOW = _settings.get("app_api", {}).get("margin_threshold_yellow", 10.0)
+    MARGIN_THRESHOLD_RED = _settings.get("app_api", {}).get("margin_threshold_red", 5.0)
     
     # Straddle settings
     STRADDLE_SLIPPAGE_TOLERANCE = {}

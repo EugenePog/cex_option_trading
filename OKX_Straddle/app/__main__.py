@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from app.strategy.strategy_base import StrategyBase
 from app.strategy.strategy_straddle_short import StrategyStraddleShort
+from app.strategy.strategy_margin_control import StrategyMarginControl
 
 class StrategyMonitor:
     def __init__(self):
@@ -41,7 +42,43 @@ class StrategyMonitor:
 
         self.okx_position_size_multiplier = configuration.OKX_POSITION_SIZE_MULTIPLIER
 
-    def _build_strategies(self, token: str) -> list[StrategyBase]:
+        self.margin_threshold_yellow = configuration.MARGIN_THRESHOLD_YELLOW
+        self.margin_threshold_red = configuration.MARGIN_THRESHOLD_RED
+
+    def _build_global_strategies(self) -> list[StrategyBase]:
+        """Strategies that run independently of any specific token"""
+
+        api_credentials = {
+            "api_key": self.api_key,
+            "api_secret": self.api_secret,
+            "passphrase": self.passphrase,
+            "flag": self.flag,
+        }
+        global_config = {
+            "margin_threshold_yellow": self.margin_threshold_yellow,
+            "margin_threshold_red": self.margin_threshold_red,
+            # add other global config here
+        }
+
+        return [
+            StrategyMarginControl(global_config, api_credentials),
+            # Add more global strategies here
+        ]
+
+    async def _run_global_strategies(self):
+        """Run all token-independent strategies"""
+        logger.info("Run global strategies")
+        strategies = self._build_global_strategies()
+        results = await asyncio.gather(
+            *[strategy.run() for strategy in strategies],
+            return_exceptions=True
+        )
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Global strategy {i} failed: {result}", exc_info=result)
+
+
+    def _build_token_specific_strategies(self, token: str) -> list[StrategyBase]:
         api_credentials = {
             "api_key": self.api_key,
             "api_secret": self.api_secret,
@@ -66,10 +103,10 @@ class StrategyMonitor:
             # Add new strategies here
         ]
 
-    async def _run_token(self, token: str):
+    async def _run_token_specific_strategies(self, token: str):
         """Run all strategies for a single token in parallel"""
         logger.info(f"Run strategies for token: {token}")
-        strategies = self._build_strategies(token)
+        strategies = self._build_token_specific_strategies(token)
         await asyncio.gather(
             *[strategy.run() for strategy in strategies],
             return_exceptions=True  # one strategy failure won't kill others
@@ -84,7 +121,8 @@ class StrategyMonitor:
             try:
                 # Run all tokens in parallel
                 await asyncio.gather(
-                    *[self._run_token(token) for token in self.tokens],
+                    self._run_global_strategies(),
+                    *[self._run_token_specific_strategies(token) for token in self.tokens],
                     return_exceptions=True
                 )
                 await asyncio.sleep(self.check_interval)
