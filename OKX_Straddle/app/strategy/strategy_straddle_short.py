@@ -41,7 +41,7 @@ class StrategyStraddleShort(StrategyBase):
             None, get_available_near_money_options,
             self.api_key, self.api_secret, self.passphrase, self.flag,
             self.token, self.config["straddle_allowed_strikes"], 1,
-            "CURRENT", "8:00"
+            self.config["straddle_price_time_flag"], self.config["straddle_price_time"]
         )
 
         if not closest["calls"][0] or not closest["puts"][0]:

@@ -32,6 +32,8 @@ class StrategyMonitor:
         self.straddle_timeframe_start = configuration.STRADDLE_TIMEFRAME_START
         self.straddle_timeframe_end = configuration.STRADDLE_TIMEFRAME_END
         self.straddle_allowed_strikes = configuration.STRADDLE_ALLOWED_STRIKES
+        self.straddle_price_time_flag = configuration.STRADDLE_PRICE_TIME_FLAG
+        self.straddle_price_time = configuration.STRADDLE_PRICE_TIME
         
         self.put_call_slippage_tolerance = configuration.PUT_CALL_SLIPPAGE_TOLERANCE
         self.put_call_bid_ask_threshold = configuration.PUT_CALL_BID_ASK_THRESHOLD
@@ -96,6 +98,8 @@ class StrategyMonitor:
             "put_call_timeframe_start": self.put_call_timeframe_start[token],
             "put_call_timeframe_end": self.put_call_timeframe_end[token],
             "executed_orders_path": self.executed_orders_path,
+            "straddle_price_time_flag": self.straddle_price_time_flag[token],
+            "straddle_price_time": self.straddle_price_time[token]
         }
 
         return [
