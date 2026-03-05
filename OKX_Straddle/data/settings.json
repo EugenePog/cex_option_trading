@@ -1,8 +1,8 @@
 {
   "app_api": {
     "check_interval": 30,
-    "margin_threshold_yellow": 2.0,
-    "margin_threshold_red": 1.5
+    "margin_threshold_yellow": 5.0,
+    "margin_threshold_red": 2.0
   },
   "BTC": {
     "okx_position_size_multiplier": 100,

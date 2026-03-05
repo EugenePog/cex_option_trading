@@ -5,6 +5,15 @@ from app import logger
 from app.cex_api.okx_margin_functions import check_margin_threshold
 from app.telegram_bot import TelegramNotifier
 
+def format_margin_currencies(currencies: dict) -> str:
+    parts = []
+    for ccy, data in currencies.items():
+        parts.append(
+            f"{ccy}. Margin: {data['margin_ratio_pct']:.2f}% Status: {data['status']} "
+            f"(Eq: ${data['eq_usd']:,.2f} | IMR: ${data['imr_usd']:,.2f} | MMR: ${data['mmr_usd']:,.2f})"
+        )
+    return " | ".join(parts)
+
 class StrategyMarginControl(StrategyBase):
     def __init__(self, config: dict, api_credentials: dict):
         # redifine init as no token argument for this class
@@ -31,6 +40,14 @@ class StrategyMarginControl(StrategyBase):
             )
         )
 
-        message = f"[MarginControl] Status: {result['status']} | Ratio: {result['margin_ratio']}"
+        message = (
+            f"Margin account status: {result['overall_status']} \n"
+            f"Total account equity: ${result['total_equity_usd']:,.2f} \n"
+            f"Details by token: \n"
+            f"{format_margin_currencies(result['currencies'])}"
+        )
+        
         logger.warning(message)
-        await self.notifier.send_message(message)
+
+        if result['overall_status'] != 'SAFE':
+            await self.notifier.send_message(message)
