@@ -3,6 +3,7 @@ import asyncio
 import functools
 from app import logger
 from app.cex_api.okx_margin_functions import check_margin_threshold
+from app.telegram_bot import TelegramNotifier
 
 class StrategyMarginControl(StrategyBase):
     def __init__(self, config: dict, api_credentials: dict):
@@ -13,6 +14,7 @@ class StrategyMarginControl(StrategyBase):
         self.api_secret = api_credentials["api_secret"]
         self.passphrase = api_credentials["passphrase"]
         self.flag = api_credentials["flag"]
+        self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id_okx_straddle"])
 
     async def should_run(self) -> bool:
         return True  # always runs every loop iteration
@@ -29,4 +31,6 @@ class StrategyMarginControl(StrategyBase):
             )
         )
 
-        logger.warning(f"[MarginControl] Status: {result['status']} | Ratio: {result['margin_ratio']}")
+        message = f"[MarginControl] Status: {result['status']} | Ratio: {result['margin_ratio']}"
+        logger.warning(message)
+        await self.notifier.send_message(message)

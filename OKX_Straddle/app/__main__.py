@@ -47,6 +47,10 @@ class StrategyMonitor:
         self.margin_threshold_yellow = configuration.MARGIN_THRESHOLD_YELLOW
         self.margin_threshold_red = configuration.MARGIN_THRESHOLD_RED
 
+        # Telegram credentials
+        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE')
+
     def _build_global_strategies(self) -> list[StrategyBase]:
         """Strategies that run independently of any specific token"""
 
@@ -55,6 +59,8 @@ class StrategyMonitor:
             "api_secret": self.api_secret,
             "passphrase": self.passphrase,
             "flag": self.flag,
+            "telegram_bot_token": self.telegram_bot_token,
+            "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
         }
         global_config = {
             "margin_threshold_yellow": self.margin_threshold_yellow,

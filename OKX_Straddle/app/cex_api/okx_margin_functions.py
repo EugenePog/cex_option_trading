@@ -27,18 +27,39 @@ def get_cross_margin_level(api_key: str, api_secret: str, passphrase: str, flag:
 
     data = response["data"][0]
 
-    total_equity      = float(data.get("totalEq", 0) or 0)       # total equity in USD
-    imr               = float(data.get("imr", 0) or 0)           # initial margin requirement
-    mmr               = float(data.get("mmr", 0) or 0)           # maintenance margin requirement
-    margin_ratio      = float(data.get("mgnRatio", 0) or 0)      # current margin ratio
-    adjusted_equity   = float(data.get("adjEq", 0) or 0)         # adjusted equity (risk-adjusted)
-    
+    total_equity = float(data.get("totalEq", 0) or 0)
+    details = data.get("details", [])
+
+    # Sum IMR and MMR across ALL currencies (cross margin pools them together)
+    total_imr = sum(float(d.get("imr", 0) or 0) for d in details)
+    total_mmr = sum(float(d.get("mmr", 0) or 0) for d in details)
+
+    # For cross margin, adjEq at account level = sum of all eqUsd (USD value of all assets)
+    # Use eqUsd per asset which is always populated
+    total_eq_usd = sum(float(d.get("eqUsd", 0) or 0) for d in details)
+
+    # Try account-level mgnRatio first, fall back to manual calculation
+    raw_mgn_ratio = data.get("mgnRatio", "")
+    if raw_mgn_ratio and raw_mgn_ratio != "":
+        margin_ratio = float(raw_mgn_ratio)
+    else:
+        # Manual calculation: total equity / maintenance margin requirement
+        margin_ratio = (total_eq_usd / total_mmr) if total_mmr > 0 else float("inf")
+
+    logger.info(
+        f"Cross margin — "
+        f"Total Equity: ${total_equity:,.2f} | "
+        f"IMR: {total_imr:.6f} | "
+        f"MMR: {total_mmr:.6f} | "
+        f"Margin Ratio: {margin_ratio:.2f}"
+    )
+
     return {
-        "total_equity_usd":   round(total_equity, 2),
-        "adjusted_equity":    round(adjusted_equity, 2),
-        "imr":                round(imr, 2),                      # initial margin required
-        "mmr":                round(mmr, 2),                      # maintenance margin required  
-        "margin_ratio":       round(margin_ratio, 4),             # key metric: adjEq / mmr
+        "total_equity_usd": round(total_equity, 2),
+        "total_eq_usd":     round(total_eq_usd, 2),
+        "imr":              round(total_imr, 6),
+        "mmr":              round(total_mmr, 6),
+        "margin_ratio":     round(margin_ratio, 4),
     }
 
 
@@ -66,7 +87,7 @@ def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag:
         f"Threshold_yellow: {threshold_yellow:.4f} | "
         f"Threshold_red: {threshold_red:.4f} | "
         f"MMR: ${margin['mmr']:,.2f} | "
-        f"Adjusted Equity: ${margin['adjusted_equity']:,.2f} | "
+        f"Total Equity: ${margin['total_eq_usd']:,.2f} | "
         f"Status: {status}"
     )
 

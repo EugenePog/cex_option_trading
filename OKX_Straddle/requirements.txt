@@ -3,3 +3,4 @@ web3
 pydantic
 asyncio
 python-okx
+python-telegram-bot
