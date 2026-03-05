@@ -3,7 +3,7 @@ import okx.Account as Account
 
 def get_cross_margin_level(api_key: str, api_secret: str, passphrase: str, flag: str) -> dict:
     """
-    Get current cross margin level and compare with threshold.
+    Get current cross margin level.
 
     Args:
         api_key    : OKX API key
@@ -12,7 +12,7 @@ def get_cross_margin_level(api_key: str, api_secret: str, passphrase: str, flag:
         flag       : "0" live, "1" demo
 
     Returns:
-        dict with margin details and threshold comparison
+        dict with margin details
     """
     account_api = Account.AccountAPI(
         api_key, api_secret, passphrase,
@@ -30,38 +30,56 @@ def get_cross_margin_level(api_key: str, api_secret: str, passphrase: str, flag:
     total_equity = float(data.get("totalEq", 0) or 0)
     details = data.get("details", [])
 
-    # Sum IMR and MMR across ALL currencies (cross margin pools them together)
-    total_imr = sum(float(d.get("imr", 0) or 0) for d in details)
-    total_mmr = sum(float(d.get("mmr", 0) or 0) for d in details)
-
-    # For cross margin, adjEq at account level = sum of all eqUsd (USD value of all assets)
-    # Use eqUsd per asset which is always populated
+    # Total equity in USD — sum eqUsd across all currencies
     total_eq_usd = sum(float(d.get("eqUsd", 0) or 0) for d in details)
 
-    # Try account-level mgnRatio first, fall back to manual calculation
+    # Convert IMR and MMR to USD per currency, then sum
+    total_imr_usd = 0.0
+    total_mmr_usd = 0.0
+
+    for d in details:
+        ccy_imr = float(d.get("imr", 0) or 0)
+        ccy_mmr = float(d.get("mmr", 0) or 0)
+
+        if ccy_imr == 0 and ccy_mmr == 0:
+            continue  # skip currencies with no margin usage
+
+        ccy_eq     = float(d.get("eq", 0) or 0)
+        ccy_eq_usd = float(d.get("eqUsd", 0) or 0)
+        ccy_price  = (ccy_eq_usd / ccy_eq) if ccy_eq > 0 else 0
+
+        total_imr_usd += ccy_imr * ccy_price
+        total_mmr_usd += ccy_mmr * ccy_price
+
+        logger.debug(
+            f"  {d.get('ccy')}: IMR={ccy_imr:.6f}, MMR={ccy_mmr:.6f}, "
+            f"Price=${ccy_price:,.2f}, IMR_USD=${ccy_imr * ccy_price:.2f}, MMR_USD=${ccy_mmr * ccy_price:.2f}"
+        )
+
+    # Try account-level mgnRatio first, fall back to manual calculation in matched units
     raw_mgn_ratio = data.get("mgnRatio", "")
     if raw_mgn_ratio and raw_mgn_ratio != "":
         margin_ratio = float(raw_mgn_ratio)
     else:
-        # Manual calculation: total equity / maintenance margin requirement
-        margin_ratio = (total_eq_usd / total_mmr) if total_mmr > 0 else float("inf")
+        margin_ratio = (total_eq_usd / total_mmr_usd) if total_mmr_usd > 0 else float("inf")
 
     logger.info(
         f"Cross margin — "
-        f"Total Equity: ${total_equity:,.2f} | "
-        f"IMR: {total_imr:.6f} | "
-        f"MMR: {total_mmr:.6f} | "
-        f"Margin Ratio: {margin_ratio:.2f}"
+        f"Total Equity: ${total_eq_usd:,.2f} | "
+        f"IMR (USD): ${total_imr_usd:,.2f} | "
+        f"MMR (USD): ${total_mmr_usd:,.2f} | "
+        f"Margin Ratio: {margin_ratio:.2f} | "
+        f"Margin Ratio %: {margin_ratio * 100:.2f}%"
     )
 
     return {
         "total_equity_usd": round(total_equity, 2),
         "total_eq_usd":     round(total_eq_usd, 2),
-        "imr":              round(total_imr, 6),
-        "mmr":              round(total_mmr, 6),
+        "imr_usd":          round(total_imr_usd, 2),
+        "mmr_usd":          round(total_mmr_usd, 2),
         "margin_ratio":     round(margin_ratio, 4),
+        "margin_ratio_pct": round(margin_ratio * 100, 2),
     }
-
 
 def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag: str, threshold_yellow: float,  threshold_red: float) -> dict:
     """
@@ -86,8 +104,8 @@ def check_margin_threshold(api_key: str, api_secret: str, passphrase: str, flag:
         f"Margin ratio: {margin_ratio:.4f} | "
         f"Threshold_yellow: {threshold_yellow:.4f} | "
         f"Threshold_red: {threshold_red:.4f} | "
-        f"MMR: ${margin['mmr']:,.2f} | "
-        f"Total Equity: ${margin['total_eq_usd']:,.2f} | "
+        f"MMR (USD): ${margin['mmr_usd']:,.2f} | "
+        f"Total Equity USD: ${margin['total_eq_usd']:,.2f} | "
         f"Status: {status}"
     )
 
