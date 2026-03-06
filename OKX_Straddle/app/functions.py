@@ -2,6 +2,7 @@ from app import logger
 from datetime import datetime, time, timezone
 import csv
 import os
+import argparse
 
 def is_within_timeframe(timeframe_start: str, timeframe_end: str) -> bool:
     """
@@ -81,3 +82,17 @@ def save_filled_orders_to_csv(strategy: str, order_result: dict, direction: str,
         writer.writerows(rows_to_write)
 
     logger.info(f"Saved {len(rows_to_write)} filled order(s) to {filepath}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="CEX Option Trading Bot")
+    
+    parser.add_argument(
+        "--env",
+        type=str,
+        choices=["test", "prod"],
+        default="test",
+        help="Trading environment (default: test)"
+    )
+
+    return parser.parse_args()

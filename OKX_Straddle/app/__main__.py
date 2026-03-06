@@ -6,13 +6,29 @@ from datetime import datetime, timezone
 from app.strategy.strategy_base import StrategyBase
 from app.strategy.strategy_straddle_short import StrategyStraddleShort
 from app.strategy.strategy_margin_control import StrategyMarginControl
+from app.functions import parse_args
 
 class StrategyMonitor:
-    def __init__(self):
-        self.api_key = os.getenv("OKX_API_KEY_DEMO")
-        self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
-        self.passphrase = os.getenv("OKX_PASSPHRASE")
-        self.flag = os.getenv("OKX_FLAG")
+    def __init__(self, env: str = "test"):
+        
+        if env == "prod":
+            # OKX keys
+            self.api_key = os.getenv("OKX_K_API_KEY_DEMO")
+            self.api_secret = os.getenv("OKX_K_API_SECRET_DEMO")
+            self.passphrase = os.getenv("OKX_K_PASSPHRASE")
+            self.flag = os.getenv("OKX_K_FLAG")
+            # Telegram credentials
+            self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE')
+        elif env == "test":
+            # OKX keys
+            self.api_key = os.getenv("OKX_API_KEY_DEMO")
+            self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
+            self.passphrase = os.getenv("OKX_PASSPHRASE")
+            self.flag = os.getenv("OKX_FLAG")
+            # Telegram credentials
+            self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN_TEST')
+            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE_TEST')
 
         self.check_interval = configuration.API_CHECK_INTERVAL  # seconds
         self.tokens = configuration.LIST_OF_TOKENS
@@ -46,10 +62,6 @@ class StrategyMonitor:
 
         self.margin_threshold_yellow = configuration.MARGIN_THRESHOLD_YELLOW
         self.margin_threshold_red = configuration.MARGIN_THRESHOLD_RED
-
-        # Telegram credentials
-        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE')
 
     def _build_global_strategies(self) -> list[StrategyBase]:
         """Strategies that run independently of any specific token"""
@@ -146,7 +158,8 @@ class StrategyMonitor:
 
 async def main():
     """Main entry point"""
-    strategy_monitor = StrategyMonitor()
+    args = parse_args()
+    strategy_monitor = StrategyMonitor(env=args.env)
     await strategy_monitor.run_monitoring_loop()
 
 if __name__ == "__main__":
