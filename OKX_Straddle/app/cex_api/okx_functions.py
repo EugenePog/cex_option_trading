@@ -4,7 +4,7 @@ import okx.MarketData as MarketData
 import okx.PublicData as PublicData
 import okx.Trade as Trade
 from typing import Optional
-
+import time
 
 def get_otm_next_expiry(
         api_key:     str,
@@ -171,6 +171,51 @@ def get_otm_next_expiry(
     }
 
 
+def get_token_price(marketAPI, token: str, price_time: str = None) -> float:
+    """
+    Get token index price.
+
+    Args:
+        marketAPI  : OKX MarketAPI instance
+        token      : token symbol e.g. "BTC"
+        price_time : if None - returns current price
+                     if set (e.g. "8:00", "14:30") - returns price at that UTC time today
+
+    Returns:
+        float: token price
+    """
+    if price_time is None:
+        # --- Current price ---
+        ticker = marketAPI.get_index_tickers(instId=f"{token}-USD")
+        if ticker.get("code") != "0" or not ticker.get("data"):
+            raise ValueError(f"Failed to get {token} index price: {ticker.get('msg')}")
+        price = float(ticker["data"][0]["idxPx"])
+        logger.info(f"Current {token} price: ${price:,.2f}")
+
+    else:
+        # --- Price at specific UTC time today ---
+        hour, minute = map(int, price_time.split(":"))
+        target_time = datetime.now(timezone.utc).replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        target_ts = int(target_time.timestamp() * 1000)
+        bar = "1H" if minute == 0 else "1m"
+
+        candles = marketAPI.get_index_candlesticks(
+            instId=f"{token}-USD",
+            bar=bar,
+            after=str(target_ts - 1),
+            limit="1"
+        )
+        if candles.get("code") != "0" or not candles.get("data"):
+            raise ValueError(f"Failed to get {token} price at {price_time} UTC: {candles.get('msg')}")
+
+        price = float(candles["data"][0][4])  # close price
+        logger.info(f"{token} price at {price_time} UTC today: ${price:,.2f}")
+
+    return price
+
+
 def get_available_near_money_options(
         api_key:           str,
         api_secret:        str,
@@ -178,7 +223,9 @@ def get_available_near_money_options(
         flag:              str,
         token:             str,
         available_strikes: list[int],
-        days_ahead:        int = 1
+        days_ahead:        int = 1,
+        price_time_flag:   str = "CURRENT",            #possible values: FIXED, CURRENT
+        price_time:        str = "8:00"                #time HH:MM in UTC
 ) -> dict:
     """
     Get available put and call options expiring N days ahead, filtered by allowed strikes.
@@ -242,13 +289,11 @@ def get_available_near_money_options(
     # ----------------------------------------------------------------
     # Step 1: Get current token index price
     # ----------------------------------------------------------------
-    ticker = marketAPI.get_index_tickers(instId=f"{token}-USD")
-
-    if ticker.get("code") != "0" or not ticker.get("data"):
-        raise ValueError(f"Failed to get {token} index price: {ticker.get('msg')}")
-
-    current_price = float(ticker["data"][0]["idxPx"])
-    logger.info(f"Current {token} price: ${current_price:,.2f}")
+    current_price = None
+    if price_time_flag == "CURRENT":
+        current_price = get_token_price(marketAPI, token)
+    elif price_time_flag == "FIXED":
+        current_price = get_token_price(marketAPI, token, price_time)
 
     # ----------------------------------------------------------------
     # Step 2: Build target expiry string
@@ -529,6 +574,37 @@ def get_tick_size(publicAPI, instId: str) -> float:
 
     return tick_sz
 
+
+def get_order_status(tradeAPI, instId: str, ordId: str) -> dict:
+    """Poll order status until filled, cancelled, or timeout"""
+    response = tradeAPI.get_order(instId=instId, ordId=ordId)
+    if response.get("code") != "0":
+        return {}
+    data = response.get("data", [])
+    return data[0] if data else {}
+
+
+def wait_for_fill(tradeAPI, instId: str, ordId: str, timeout: int = 30, interval: int = 2) -> dict:
+    """
+    Poll until order is filled or cancelled.
+    States: live, partially_filled, filled, cancelled, mmp_canceled
+    """
+    elapsed = 0
+    while elapsed < timeout:
+        order = get_order_status(tradeAPI, instId, ordId)
+        state = order.get("state")
+
+        if state in ("filled", "cancelled", "mmp_canceled"):
+            return order
+        
+        logger.info(f"Order {ordId} state: {state}, waiting...")
+        time.sleep(interval)
+        elapsed += interval
+
+    logger.warning(f"Order {ordId} timed out after {timeout}s")
+    return get_order_status(tradeAPI, instId, ordId)  # return last known state
+
+
 def open_position(
         call_instId:        str,
         put_instId:         str,
@@ -626,47 +702,40 @@ def open_position(
     # Step 3: Build order definitions for both legs
     # ----------------------------------------------------------------
     orders = []
-    
-    if direction == "SHORT":
-        orders = [
-            {
-                "instId":  call_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "sell",
-                "ordType": "limit",             # ✅ options require limit orders
-                "sz":      str(size_call),
-                "px":      call_limit_px       # ✅ price required for limit orders
-            },
-            {
-                "instId":  put_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "sell",
-                "ordType": "limit",
-                "sz":      str(size_put),
-                "px":      put_limit_px
-            }
-        ]
-    else:
-        orders = [
-            {
-                "instId":  call_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "buy",
-                "ordType": "limit",             # ✅ options require limit orders
-                "sz":      str(size_call),
-                "px":      call_limit_px       # ✅ price required for limit orders
-            },
-            {
-                "instId":  put_instId,
-                "tdMode":  "cross", #"isolated",
-                "side":    "buy",
-                "ordType": "limit",
-                "sz":      str(size_put),
-                "px":      put_limit_px
-            }
-        ]   
+    leg_map = {}  # track which index corresponds to call/put
 
-    logger.info(f"Orders to execute: {orders}")     
+    if direction == "SHORT":
+        side = "sell"
+    else:
+        side = "buy"
+
+    if size_call > 0:
+        leg_map["call"] = len(orders)
+        orders.append({
+            "instId":  call_instId,
+            "tdMode":  "cross",
+            "side":    side,
+            "ordType": "limit",
+            "sz":      str(size_call),
+            "px":      call_limit_px
+        })
+
+    if size_put > 0:
+        leg_map["put"] = len(orders)
+        orders.append({
+            "instId":  put_instId,
+            "tdMode":  "cross",
+            "side":    side,
+            "ordType": "limit",
+            "sz":      str(size_put),
+            "px":      put_limit_px
+        })
+
+    if not orders:
+        logger.info("No legs to open — both sizes are 0")
+        return {"status": "skipped", "call": None, "put": None}
+
+    logger.info(f"Orders to execute: {orders}")  
 
     # ----------------------------------------------------------------
     # Step 4: Place both legs using batch order (atomic, single request)
@@ -679,15 +748,30 @@ def open_position(
             raise ValueError(f"Batch order failed: {response.get('msg')}")
 
         results   = response.get("data", [])
-        call_result = results[0] if len(results) > 0 else {}
-        put_result  = results[1] if len(results) > 1 else {}
+        #call_result = results[0] if len(results) > 0 else {}
+        #put_result  = results[1] if len(results) > 1 else {}
+        call_result = results[leg_map["call"]] if "call" in leg_map else {}
+        put_result  = results[leg_map["put"]]  if "put"  in leg_map else {}
 
-        # --- Check individual leg results ---
+        # --- Check individual leg placement results ---
         for leg, res in [("CALL", call_result), ("PUT", put_result)]:
             if res.get("sCode") != "0":
                 logger.info(f"{leg} leg error: {res.get('sMsg')}")
             else:
                 logger.info(f"{leg} leg placed — ordId: {res.get('ordId')}")
+
+        # ----------------------------------------------------------------
+        # Step 5: Poll execution results for both legs
+        # ----------------------------------------------------------------
+        call_fill = wait_for_fill(tradeAPI, call_instId, call_result.get("ordId")) if call_result.get("ordId") else {}
+        put_fill  = wait_for_fill(tradeAPI, put_instId,  put_result.get("ordId"))  if put_result.get("ordId")  else {}
+
+        for leg, fill in [("CALL", call_fill), ("PUT", put_fill)]:
+            logger.info(
+                f"{leg} execution — state: {fill.get('state')}, "
+                f"filled: {fill.get('fillSz')}/{fill.get('sz')}, "
+                f"avg fill px: {fill.get('avgPx')}"
+            )
 
         return {
             "status": "placed",
@@ -697,6 +781,12 @@ def open_position(
                 "px":      call_limit_px,
                 "sCode":  call_result.get("sCode"),
                 "sMsg":   call_result.get("sMsg"),
+                # execution result
+                "state":   call_fill.get("state"),
+                "fill_sz": call_fill.get("fillSz"),
+                "avg_px":  call_fill.get("avgPx"),
+                "fee":     call_fill.get("fee"),
+                "fill_time": datetime.fromtimestamp(int(call_fill.get("fillTime", 0)) / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if call_fill.get("fillTime") else None,
             },
             "put": {
                 "instId": put_instId,
@@ -704,6 +794,12 @@ def open_position(
                 "px":      put_limit_px,
                 "sCode":  put_result.get("sCode"),
                 "sMsg":   put_result.get("sMsg"),
+                # execution result
+                "state":   put_fill.get("state"),
+                "fill_sz": put_fill.get("fillSz"),
+                "avg_px":  put_fill.get("avgPx"),
+                "fee":     put_fill.get("fee"),
+                "fill_time": datetime.fromtimestamp(int(put_fill.get("fillTime", 0)) / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') if put_fill.get("fillTime") else None,
             }
         }
 
