@@ -104,6 +104,8 @@ class StrategyMonitor:
             "api_secret": self.api_secret,
             "passphrase": self.passphrase,
             "flag": self.flag,
+            "telegram_bot_token": self.telegram_bot_token,
+            "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
         }
         token_config = {
             "straddle_timeframe_start": self.straddle_timeframe_start[token],

@@ -1,5 +1,6 @@
 from app import logger
 from abc import ABC, abstractmethod
+from app.telegram_bot import TelegramNotifier
 
 class StrategyBase(ABC):
     def __init__(self, token: str, config: dict, api_credentials: dict):
@@ -9,6 +10,8 @@ class StrategyBase(ABC):
         self.api_secret = api_credentials["api_secret"]
         self.passphrase = api_credentials["passphrase"]
         self.flag = api_credentials["flag"]
+        self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id_okx_straddle"])
+
 
     @abstractmethod
     async def should_run(self) -> bool:
