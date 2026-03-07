@@ -13,8 +13,8 @@ class StrategyMonitor:
         
         if env == "prod":
             # OKX keys
-            self.api_key = os.getenv("OKX_K_API_KEY_DEMO")
-            self.api_secret = os.getenv("OKX_K_API_SECRET_DEMO")
+            self.api_key = os.getenv("OKX_K_API_KEY")
+            self.api_secret = os.getenv("OKX_K_API_SECRET")
             self.passphrase = os.getenv("OKX_K_PASSPHRASE")
             self.flag = os.getenv("OKX_K_FLAG")
             # Telegram credentials

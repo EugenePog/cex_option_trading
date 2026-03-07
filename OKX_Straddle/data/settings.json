@@ -1,14 +1,14 @@
 {
   "app_api": {
     "check_interval": 60,
-    "margin_threshold_yellow": 1000.0,
+    "margin_threshold_yellow": 2000.0,
     "margin_threshold_red": 1.5
   },
   "BTC": {
     "okx_position_size_multiplier": 100,
     "straddle_strategy": {
       "slippage_tolerance": 0.00,
-      "bid_ask_threshold": 0.3,
+      "bid_ask_threshold": 0.15,
       "amount": 0.01,
       "timeframe_start": "08:01",
       "timeframe_end": "08:30",
