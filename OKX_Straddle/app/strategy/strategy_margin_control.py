@@ -24,6 +24,7 @@ class StrategyMarginControl(StrategyBase):
         self.passphrase = api_credentials["passphrase"]
         self.flag = api_credentials["flag"]
         self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id_okx_straddle"])
+        self.check_interval = config["check_interval"]
 
     async def should_run(self) -> bool:
         return True  # always runs every loop iteration

@@ -24,11 +24,13 @@ class Configuration:
 
     _settings = load_settings(SETTINGS_FILE_PATH)
 
-    API_CHECK_INTERVAL = _settings.get("app_api", {}).get("check_interval", "60")
+    # Settings for the margin control
+    MARGIN_THRESHOLD_YELLOW = _settings.get("margin_control_strategy", {}).get("margin_threshold_yellow", 10.0)
+    MARGIN_THRESHOLD_RED = _settings.get("margin_control_strategy", {}).get("margin_threshold_red", 5.0)
+    CHECK_INTERVAL_MARGIN_CONTROL = _settings.get("margin_control_strategy", {}).get("check_interval", "10")
 
-    # Thresholds for the margin monitoring
-    MARGIN_THRESHOLD_YELLOW = _settings.get("app_api", {}).get("margin_threshold_yellow", 10.0)
-    MARGIN_THRESHOLD_RED = _settings.get("app_api", {}).get("margin_threshold_red", 5.0)
+    # Settings for the account balance monitor
+    CHECK_INTERVAL_ACCOUNT_BALANCE = _settings.get("account_balance_strategy", {}).get("check_interval", "10")
     
     # Straddle settings
     STRADDLE_SLIPPAGE_TOLERANCE = {}
@@ -46,6 +48,7 @@ class Configuration:
     PUT_CALL_TIMEFRAME_END = {}
     PUT_CALL_INDENT = {}
     OKX_POSITION_SIZE_MULTIPLIER = {}
+    STRADDLE_CHECK_INTERVAL = {}
 
     for token in LIST_OF_TOKENS:
         STRADDLE_SLIPPAGE_TOLERANCE[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("slippage_tolerance", "0.001")
@@ -56,6 +59,7 @@ class Configuration:
         STRADDLE_ALLOWED_STRIKES[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("allowed_strikes", [60000, 70000])
         STRADDLE_PRICE_TIME_FLAG[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("price_time_flag", "CURRENT")
         STRADDLE_PRICE_TIME[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("price_time", "8:00")
+        STRADDLE_CHECK_INTERVAL[token] = _settings.get(f"{token}", {}).get("straddle_strategy", {}).get("check_interval", "10")
 
         PUT_CALL_SLIPPAGE_TOLERANCE[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("slippage_tolerance", "0.001")
         PUT_CALL_BID_ASK_THRESHOLD[token] = _settings.get(f"{token}", {}).get("long_put_call_strategy", {}).get("bid_ask_threshold", "0.001")

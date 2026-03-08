@@ -52,6 +52,12 @@ def format_position_message(position: dict) -> str:
 
 
 class StrategyStraddleShort(StrategyBase):
+    def __init__(self, token: str, config: dict, api_credentials: dict):
+        # run StrategyBase init method
+        super().__init__(token, config, api_credentials)
+        
+        # additional initialization
+        self.check_interval = config["straddle_check_interval"]
 
     async def should_run(self) -> bool:
         return is_within_timeframe(

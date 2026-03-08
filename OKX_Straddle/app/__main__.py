@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.strategy.strategy_base import StrategyBase
 from app.strategy.strategy_straddle_short import StrategyStraddleShort
 from app.strategy.strategy_margin_control import StrategyMarginControl
+from app.strategy.strategy_account_balance import StrategyAccountBalance
 from app.functions import parse_args
 
 class StrategyMonitor:
@@ -30,7 +31,9 @@ class StrategyMonitor:
             self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN_TEST')
             self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE_TEST')
 
-        self.check_interval = configuration.API_CHECK_INTERVAL  # seconds
+        self.check_interval_margin_control = configuration.CHECK_INTERVAL_MARGIN_CONTROL  # seconds
+        self.check_interval_account_balance = configuration.CHECK_INTERVAL_ACCOUNT_BALANCE  # seconds
+        self.straddle_check_interval = configuration.STRADDLE_CHECK_INTERVAL  # seconds
         self.tokens = configuration.LIST_OF_TOKENS
         self.executed_orders_path = configuration.EXECUTED_ORDERS_PATH
         
@@ -74,14 +77,22 @@ class StrategyMonitor:
             "telegram_bot_token": self.telegram_bot_token,
             "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
         }
-        global_config = {
+        global_config_margin_control = {
             "margin_threshold_yellow": self.margin_threshold_yellow,
             "margin_threshold_red": self.margin_threshold_red,
+            "check_interval": self.check_interval_margin_control
+            # add other global config here
+        }
+        global_config_account_balance = {
+            "margin_threshold_yellow": self.margin_threshold_yellow,
+            "margin_threshold_red": self.margin_threshold_red,
+            "check_interval": self.check_interval_account_balance
             # add other global config here
         }
 
         return [
-            StrategyMarginControl(global_config, api_credentials),
+            StrategyMarginControl(global_config_margin_control, api_credentials),
+            StrategyAccountBalance(global_config_account_balance, api_credentials),
             # Add more global strategies here
         ]
 
@@ -119,7 +130,8 @@ class StrategyMonitor:
             "put_call_timeframe_end": self.put_call_timeframe_end[token],
             "executed_orders_path": self.executed_orders_path,
             "straddle_price_time_flag": self.straddle_price_time_flag[token],
-            "straddle_price_time": self.straddle_price_time[token]
+            "straddle_price_time": self.straddle_price_time[token],
+            "straddle_check_interval": self.straddle_check_interval[token]
         }
 
         return [
@@ -136,25 +148,42 @@ class StrategyMonitor:
             return_exceptions=True  # one strategy failure won't kill others
         )
 
-    async def run_monitoring_loop(self):
-        """Main monitoring loop that runs strategies every given interval"""
-        logger.info(f"Starting {configuration.PROJECT_NAME} for tokens: {', '.join(self.tokens)}, time: {datetime.now(timezone.utc).replace(microsecond=0)}")
-        logger.info(f"Loop run interval: {self.check_interval} seconds")
-
+    async def _run_strategy_loop(self, strategy: StrategyBase):
+        """Run a single strategy on its own interval loop"""
         while True:
             try:
-                # Run all tokens in parallel
-                await asyncio.gather(
-                    self._run_global_strategies(),
-                    *[self._run_token_specific_strategies(token) for token in self.tokens],
-                    return_exceptions=True
-                )
-                await asyncio.sleep(self.check_interval)
-
+                await strategy.run()
             except Exception as e:
-                logger.error(f"Error in monitoring loop iteration: {e}", exc_info=True)
-                # Wait and continue the next iteration despite errors
-                await asyncio.sleep(self.check_interval)
+                logger.error(f"Error in strategy {strategy.__class__.__name__}: {e}", exc_info=True)
+            await asyncio.sleep(strategy.check_interval)
+
+    async def run_monitoring_loop(self):
+        """Main monitoring loop that runs strategies each for different given interval"""
+        logger.info(f"Starting {configuration.PROJECT_NAME} for tokens: {', '.join(self.tokens)}, time: {datetime.now(timezone.utc).replace(microsecond=0)}")
+
+        try:
+            # Build all strategies
+            all_strategies = self._build_global_strategies()
+            for token in self.tokens:
+                all_strategies += self._build_token_specific_strategies(token)
+
+            # Launch each strategy as an independent task with its own interval
+            tasks = [
+                asyncio.create_task(self._run_strategy_loop(strategy))
+                for strategy in all_strategies
+            ]
+
+            logger.info(f"Launched {len(tasks)} strategy tasks")
+            for s in all_strategies:
+                logger.info(f"Strategy: {s.__class__.__name__} — interval: {s.check_interval}s")
+
+            # Run forever until cancelled
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        except Exception as e:
+            logger.error(f"Error in monitoring loop iteration: {e}", exc_info=True)
+            # Wait and continue the next iteration despite errors
+            await asyncio.sleep(self.check_interval_margin_control)
 
         
 
