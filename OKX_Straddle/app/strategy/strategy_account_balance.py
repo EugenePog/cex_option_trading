@@ -7,76 +7,46 @@ from app.cex_api.okx_margin_functions import check_margin_threshold
 import functools
 
 def format_balance(balance: dict) -> str:
-    header = f"\n{'Currency':<20} {'Total':>12} {'Available':>12} {'USD Value':>12}"
-    separator = "-" * 58
-    rows = [header, separator]
+    lines = ["💰 *Account Balance*"]
     for ccy, data in balance.items():
-        rows.append(
-            f"{ccy:<20} {data['total']:>12.6f} {data['available']:>12.6f} {data['usd_value']:>12.2f}"
-        )
-    return "\n".join(rows)
+        lines.append(f"{ccy}: `{data['total']:.4f}` (${data['usd_value']:,.2f})")
+    return "\n".join(lines)
 
 
 def format_positions(positions: list) -> str:
     if not positions:
-        return "No open positions"
+        return "📭 *No open positions*"
 
-    col = {"leg": 6, "instId": 28, "side": 8, "size": 8, "avg_px": 10, "upl": 12}
-    separator = "-" * 82
-
-    def header_row():
-        return (
-            f"{'Leg':<{col['leg']}} "
-            f"{'instId':<{col['instId']}} "
-            f"{'side':<{col['side']}} "
-            f"{'size':<{col['size']}} "
-            f"{'avg_px':<{col['avg_px']}} "
-            f"{'upl':<{col['upl']}}"
-        )
-
-    def data_row(leg, instId, side, size, avg_px, upl):
-        return (
-            f"{leg:<{col['leg']}} "
-            f"{instId:<{col['instId']}} "
-            f"{side:<{col['side']}} "
-            f"{size:<{col['size']}} "
-            f"{avg_px:<{col['avg_px']}} "
-            f"{float(upl):<{col['upl']}.8f}"
-        )
-
-    lines = [separator, header_row(), separator]
-
+    lines = ["📊 *Opened Positions*"]
     for i, pos in enumerate(positions):
-        lines.append(data_row(
-            str(i + 1),
-            pos.get("instId", ""),
-            pos.get("side", ""),
-            str(pos.get("size", "")),
-            str(pos.get("avg_px", "")),
-            str(pos.get("upl", "")),
-        ))
-
-    lines.append(separator)
+        upl = float(pos.get("upl", 0) or 0)
+        upl_emoji = "🟢" if upl >= 0 else "🔴"
+        lines.append(
+            f"{i+1}. `{pos.get('instId', '')}` | "
+            f"sz: {pos.get('size', '')} | px: {pos.get('avg_px', '')} | "
+            f"{upl_emoji} upl: {upl:.8f}"
+        )
     return "\n".join(lines)
 
+
 def format_margin(margin: dict, threshold_yellow: float, threshold_red: float) -> str:
+    status_emoji = {"SAFE": "🟢", "WARNING": "🟡", "CRITICAL": "🔴"}
+    overall = margin["overall_status"]
+
     lines = [
-        f"Overall Status: {margin['overall_status']} | Total Equity: ${margin['total_equity_usd']:,.2f} | "
-        f"Thresholds: Yellow {float(threshold_yellow) * 100:.0f}% | Red {float(threshold_red) * 100:.0f}%"
+        f"📐 *Margin*",
+        f"Status: {status_emoji.get(overall, '')} {overall}",
+        f"Total Equity: ${margin['total_equity_usd']:,.2f}",
+        f"Legend: 🟡 {float(threshold_yellow)*100:.0f}% | 🔴 {float(threshold_red)*100:.0f}%",
     ]
-    separator = "-" * 70
-    lines.append(separator)
-    lines.append(f"{'Currency':<12} {'Margin %':>12} {'Status':<10} {'IMR USD':>10} {'MMR USD':>10}")
-    lines.append(separator)
+
     for ccy, data in margin["currencies"].items():
+        s = data["status"]
         lines.append(
-            f"{ccy:<12} "
-            f"{data['margin_ratio_pct']:>11.2f}% "
-            f"{data['status']:<10} "
-            f"${data['imr_usd']:>9,.2f} "
-            f"${data['mmr_usd']:>9,.2f}"
+            f"{ccy}: {status_emoji.get(s, '')} {data['margin_ratio_pct']:.2f}% | "
+            f"IMR: ${data['imr_usd']:,.2f} | MMR: ${data['mmr_usd']:,.2f}"
         )
-    lines.append(separator)
+
     return "\n".join(lines)
 
 class StrategyAccountBalance(StrategyBase):
@@ -112,13 +82,10 @@ class StrategyAccountBalance(StrategyBase):
         )
 
         message = (
-            f"Account Balance:"
             f"{format_balance(balance)}\n\n"
-            f"Existing Positions:\n"
             f"{format_positions(positions)}\n\n"
-            f"Margin:\n"
             f"{format_margin(margin, self.config['margin_threshold_yellow'], self.config['margin_threshold_red'])}"
         )
 
         logger.info(message)
-        await self.notifier.send_message(message)
+        await self.notifier.send_message(message, parse_mode="Markdown")

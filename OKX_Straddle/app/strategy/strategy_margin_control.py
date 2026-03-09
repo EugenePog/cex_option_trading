@@ -6,13 +6,15 @@ from app.cex_api.okx_margin_functions import check_margin_threshold
 from app.telegram_bot import TelegramNotifier
 
 def format_margin_currencies(currencies: dict) -> str:
-    parts = []
+    status_emoji = {"SAFE": "🟢", "WARNING": "🟡", "CRITICAL": "🔴"}
+    lines = []
     for ccy, data in currencies.items():
-        parts.append(
-            f"{ccy}. Margin: {data['margin_ratio_pct']:.2f}% Status: {data['status']} "
-            f"(Eq: ${data['eq_usd']:,.2f} | IMR: ${data['imr_usd']:,.2f} | MMR: ${data['mmr_usd']:,.2f})"
+        s = data["status"]
+        lines.append(
+            f"{ccy}: {status_emoji.get(s, '')} {data['margin_ratio_pct']:.2f}% | "
+            f"Eq: ${data['eq_usd']:,.2f} | IMR: ${data['imr_usd']:,.2f} | MMR: ${data['mmr_usd']:,.2f}"
         )
-    return " | ".join(parts)
+    return "\n".join(lines)
 
 class StrategyMarginControl(StrategyBase):
     def __init__(self, config: dict, api_credentials: dict):
@@ -41,14 +43,18 @@ class StrategyMarginControl(StrategyBase):
             )
         )
 
+        # Message
+        status_emoji = {"SAFE": "🟢", "WARNING": "🟡", "CRITICAL": "🔴"}
+        overall = result["overall_status"]
+
         message = (
-            f"Margin account status: {result['overall_status']} \n"
-            f"Total account equity: ${result['total_equity_usd']:,.2f} \n"
-            f"Details by token: \n"
+            f"📐 *Margin Control*\n"
+            f"Status: {status_emoji.get(overall, '')} {overall}\n"
+            f"Total Equity: ${result['total_equity_usd']:,.2f}\n\n"
             f"{format_margin_currencies(result['currencies'])}"
         )
         
         logger.warning(message)
 
         if result['overall_status'] != 'SAFE':
-            await self.notifier.send_message(message)
+            await self.notifier.send_message(message, parse_mode="Markdown")
