@@ -9,9 +9,14 @@ from app.strategy.strategy_margin_control import StrategyMarginControl
 from app.strategy.strategy_account_balance import StrategyAccountBalance
 from app.functions import parse_args
 
+STRATEGY_CLASS_MAP = {
+    "margin_control_strategy":  StrategyMarginControl,   # class object here, not string
+    "account_balance_strategy": StrategyAccountBalance,
+    "straddle_short_strategy":  StrategyStraddleShort,
+}
+
 class StrategyMonitor:
     def __init__(self, env: str = "test"):
-        
         if env == "prod":
             # OKX keys
             self.api_key = os.getenv("OKX_K_API_KEY")
@@ -31,11 +36,7 @@ class StrategyMonitor:
             self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN_TEST')
             self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE_TEST')
 
-        self.check_interval_margin_control = configuration.CHECK_INTERVAL_MARGIN_CONTROL  # seconds
-        self.check_interval_account_balance = configuration.CHECK_INTERVAL_ACCOUNT_BALANCE  # seconds
-        self.straddle_check_interval = configuration.STRADDLE_CHECK_INTERVAL  # seconds
         self.tokens = configuration.LIST_OF_TOKENS
-        self.executed_orders_path = configuration.EXECUTED_ORDERS_PATH
         
         if not all([self.api_key, self.api_secret, self.passphrase]):
             logger.error("Missing API credentials in environment variables")
@@ -45,26 +46,6 @@ class StrategyMonitor:
             logger.error("No tokens configured in configuration.list_of_tokens")
             raise ValueError("No tokens configured in configuration.list_of_tokens")
 
-        self.straddle_slippage_tolerance = configuration.STRADDLE_SLIPPAGE_TOLERANCE
-        self.straddle_bid_ask_threshold = configuration.STRADDLE_BID_ASK_THRESHOLD
-        self.straddle_amount = configuration.STRADDLE_AMOUNT
-        self.straddle_timeframe_start = configuration.STRADDLE_TIMEFRAME_START
-        self.straddle_timeframe_end = configuration.STRADDLE_TIMEFRAME_END
-        self.straddle_allowed_strikes = configuration.STRADDLE_ALLOWED_STRIKES
-        self.straddle_price_time_flag = configuration.STRADDLE_PRICE_TIME_FLAG
-        self.straddle_price_time = configuration.STRADDLE_PRICE_TIME
-        
-        self.put_call_slippage_tolerance = configuration.PUT_CALL_SLIPPAGE_TOLERANCE
-        self.put_call_bid_ask_threshold = configuration.PUT_CALL_BID_ASK_THRESHOLD
-        self.put_call_amount = configuration.PUT_CALL_AMOUNT
-        self.put_call_timeframe_start = configuration.PUT_CALL_TIMEFRAME_START
-        self.put_call_timeframe_end = configuration.PUT_CALL_TIMEFRAME_END
-        self.put_call_indent = configuration.PUT_CALL_INDENT
-
-        self.okx_position_size_multiplier = configuration.OKX_POSITION_SIZE_MULTIPLIER
-
-        self.margin_threshold_yellow = configuration.MARGIN_THRESHOLD_YELLOW
-        self.margin_threshold_red = configuration.MARGIN_THRESHOLD_RED
 
     def _build_global_strategies(self) -> list[StrategyBase]:
         """Strategies that run independently of any specific token"""
@@ -77,24 +58,23 @@ class StrategyMonitor:
             "telegram_bot_token": self.telegram_bot_token,
             "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
         }
-        global_config_margin_control = {
-            "margin_threshold_yellow": self.margin_threshold_yellow,
-            "margin_threshold_red": self.margin_threshold_red,
-            "check_interval": self.check_interval_margin_control
-            # add other global config here
-        }
-        global_config_account_balance = {
-            "margin_threshold_yellow": self.margin_threshold_yellow,
-            "margin_threshold_red": self.margin_threshold_red,
-            "check_interval": self.check_interval_account_balance
-            # add other global config here
-        }
+        
+        strategies = []
+        for strategy_name, config in configuration.GLOBAL_STRATEGIES_CONFIG.items():
+            cls = STRATEGY_CLASS_MAP.get(strategy_name)
+            if cls:
+                # there is no config transformation for now. Placeholder for possible future mappings
+                config_transformed = {
+                    "run_flag": config["run_flag"],
+                    "margin_threshold_yellow": config["margin_threshold_yellow"],
+                    "margin_threshold_red": config["margin_threshold_red"],
+                    "check_interval": config["check_interval"]
+                    # add other config mapping here
+                }
 
-        return [
-            StrategyMarginControl(global_config_margin_control, api_credentials),
-            StrategyAccountBalance(global_config_account_balance, api_credentials),
-            # Add more global strategies here
-        ]
+                strategies.append(cls(config_transformed, api_credentials))
+                logger.info(f"Global strategy loaded: {strategy_name}")
+        return strategies
 
     async def _run_global_strategies(self):
         """Run all token-independent strategies"""
@@ -118,26 +98,33 @@ class StrategyMonitor:
             "telegram_bot_token": self.telegram_bot_token,
             "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
         }
-        token_config = {
-            "straddle_timeframe_start": self.straddle_timeframe_start[token],
-            "straddle_timeframe_end": self.straddle_timeframe_end[token],
-            "straddle_amount": self.straddle_amount[token],
-            "straddle_allowed_strikes": self.straddle_allowed_strikes[token],
-            "straddle_slippage_tolerance": self.straddle_slippage_tolerance[token],
-            "straddle_bid_ask_threshold": self.straddle_bid_ask_threshold[token],
-            "okx_position_size_multiplier": self.okx_position_size_multiplier[token],
-            "put_call_timeframe_start": self.put_call_timeframe_start[token],
-            "put_call_timeframe_end": self.put_call_timeframe_end[token],
-            "executed_orders_path": self.executed_orders_path,
-            "straddle_price_time_flag": self.straddle_price_time_flag[token],
-            "straddle_price_time": self.straddle_price_time[token],
-            "straddle_check_interval": self.straddle_check_interval[token]
-        }
 
-        return [
-            StrategyStraddleShort(token, token_config, api_credentials),
-            # Add new strategies here
-        ]
+        strategies = []
+        token_cfg = configuration.TOKEN_STRATEGIES_CONFIG.get(token, {})
+        for strategy_name, config in token_cfg.items():
+            cls = STRATEGY_CLASS_MAP.get(strategy_name)
+            if cls:
+                # strategy config mapping: configuration class -> parameters in __init__ of the strategy
+                config_transformed = {
+                    "run_flag": config["run_flag"],
+                    "timeframe_days": config["timeframe_days"],
+                    "timeframe_start": config["timeframe_start"],
+                    "timeframe_end": config["timeframe_end"],
+                    "amount": config["amount"],
+                    "allowed_strikes": config["allowed_strikes"],
+                    "slippage_tolerance": config["slippage_tolerance"],
+                    "bid_ask_threshold": config["bid_ask_threshold"],
+                    "okx_position_size_multiplier": config["okx_position_size_multiplier"],
+                    "executed_orders_path": config["executed_orders_path"],
+                    "price_time_flag": config["price_time_flag"],
+                    "price_time": config["price_time"],
+                    "check_interval": config["check_interval"]
+                    # add other config mapping here
+                }
+
+                strategies.append(cls(token, config_transformed, api_credentials))
+                logger.info(f"Token strategy loaded: {token} / {strategy_name}")
+        return strategies
 
     async def _run_token_specific_strategies(self, token: str):
         """Run all strategies for a single token in parallel"""

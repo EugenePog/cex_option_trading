@@ -4,6 +4,14 @@ import csv
 import os
 import argparse
 
+def is_allowed_day(allowed_days: list) -> bool:
+    """Check if today (UTC) is in the list of allowed days"""
+    day_map = {0: "MON", 1: "TUE", 2: "WED", 3: "THU", 4: "FRI", 5: "SAT", 6: "SUN"}
+    today = day_map[datetime.now(timezone.utc).weekday()]
+    is_allowed = today in allowed_days
+    logger.info(f"Today (UTC): {today} | Allowed days: {allowed_days} | {'✅ Allowed' if is_allowed else '❌ Not allowed'}")
+    return is_allowed
+
 def is_within_timeframe(timeframe_start: str, timeframe_end: str) -> bool:
     """
     Check if current UTC time is within the given timeframe.
@@ -50,6 +58,10 @@ def is_within_timeframe(timeframe_start: str, timeframe_end: str) -> bool:
 def save_filled_orders_to_csv(strategy: str, order_result: dict, direction: str, filepath: str):
     """Save filled legs from order result to CSV file"""
     
+    if not order_result:
+        logger.info("No order result to save")
+        return
+    
     fieldnames = ["strategy", "time", "option", "direction", "order_id", "order_price", "avg_fill_price", "fill_size", "fee"]
     
     # Check if file exists to write header only once
@@ -58,6 +70,8 @@ def save_filled_orders_to_csv(strategy: str, order_result: dict, direction: str,
     rows_to_write = []
     for leg in ["call", "put"]:
         leg_data = order_result.get(leg, {})
+        if not leg_data:          # ← skip if None or empty
+            continue
         if leg_data.get("state") == "filled":
             rows_to_write.append({
                 "strategy":         strategy,

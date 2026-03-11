@@ -1,4 +1,4 @@
-from app.functions import is_within_timeframe
+from app.functions import is_within_timeframe, is_allowed_day
 from app.strategy.strategy_base import StrategyBase
 import asyncio
 from app import logger
@@ -32,12 +32,15 @@ class StrategyStraddleShort(StrategyBase):
         super().__init__(token, config, api_credentials)
         
         # additional initialization
-        self.check_interval = config["straddle_check_interval"]
+        self.check_interval = config["check_interval"]
 
     async def should_run(self) -> bool:
-        return is_within_timeframe(
-            self.config["straddle_timeframe_start"],
-            self.config["straddle_timeframe_end"]
+        return (
+            is_allowed_day(self.config["timeframe_days"]) and
+            is_within_timeframe(
+                self.config["timeframe_start"],
+                self.config["timeframe_end"]
+            )
         )
 
     async def execute(self):
@@ -47,7 +50,7 @@ class StrategyStraddleShort(StrategyBase):
         await self._close_all_open_orders()
 
         # Get position size from settings
-        call_size = int(self.config["straddle_amount"] * self.config["okx_position_size_multiplier"])
+        call_size = int(self.config["amount"] * self.config["okx_position_size_multiplier"])
         put_size = call_size
 
         summary = await loop.run_in_executor(
@@ -67,8 +70,8 @@ class StrategyStraddleShort(StrategyBase):
         closest = await loop.run_in_executor(
             None, get_available_near_money_options,
             self.api_key, self.api_secret, self.passphrase, self.flag,
-            self.token, self.config["straddle_allowed_strikes"], 1,
-            self.config["straddle_price_time_flag"], self.config["straddle_price_time"]
+            self.token, self.config["allowed_strikes"], 1,
+            self.config["price_time_flag"], self.config["price_time"]
         )
 
         if not closest["calls"][0] or not closest["puts"][0]:
@@ -85,16 +88,17 @@ class StrategyStraddleShort(StrategyBase):
                 closest_call["instId"], closest_put["instId"],
                 call_to_open, put_to_open,
                 self.api_key, self.api_secret, self.passphrase, self.flag,
-                self.config["straddle_slippage_tolerance"],
-                self.config["straddle_bid_ask_threshold"],
+                self.config["slippage_tolerance"],
+                self.config["bid_ask_threshold"],
                 "SHORT"
             )
 
             logger.info(f"Openned position: {position}")
-            save_filled_orders_to_csv("StrategyStraddleShort", position, "SHORT", self.config["executed_orders_path"])
+            if position and position.get("status") != "error":
+                save_filled_orders_to_csv("StrategyStraddleShort", position, "SHORT", self.config["executed_orders_path"])
             
-            message = format_position_message(position)
-            await self.notifier.send_message(message, parse_mode="Markdown")
+                message = format_position_message(position)
+                await self.notifier.send_message(message, parse_mode="Markdown")
 
 
     async def _close_all_open_orders(self):
