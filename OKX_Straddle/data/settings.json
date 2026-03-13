@@ -17,11 +17,11 @@
       "run_flag": 1,
       "check_interval": 60,
       "slippage_tolerance": 0.00,
-      "bid_ask_threshold": 0.35,
+      "bid_ask_threshold": 0.1,
       "amount": 0.01,
       "timeframe_days": ["TUE", "WED", "THU", "FRI", "SAT"],
       "timeframe_start": "08:01",
-      "timeframe_end": "08:30",
+      "timeframe_end": "09:30",
       "allowed_strikes":  [50000, 50500, 51000, 51500, 52000, 52500, 53000, 53500, 54000, 54500
                           , 55000, 55500, 56000, 56500, 57000, 57500, 58000, 58500, 59000, 59500
                           , 60000, 60500, 61000, 61500, 62000, 62500, 63000, 63500, 64000, 64500
