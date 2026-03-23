@@ -9,7 +9,7 @@ import functools
 def format_balance(balance: dict) -> str:
     lines = ["💰 *Account Balance*"]
     for ccy, data in balance.items():
-        lines.append(f"{ccy}: `{data['total']:.4f}` (${data['usd_value']:,.2f})")
+        lines.append(f"{ccy}: `{data['total']:.6f}` (${data['usd_value']:,.2f})")
     return "\n".join(lines)
 
 
@@ -83,8 +83,8 @@ class StrategyAccountBalance(StrategyBase):
 
         message = (
             f"{format_balance(balance)}\n\n"
-            f"{format_positions(positions)}\n\n"
             f"{format_margin(margin, self.config['margin_threshold_yellow'], self.config['margin_threshold_red'])}"
+            f"{format_positions(positions)}\n\n"
         )
 
         logger.info(message)
