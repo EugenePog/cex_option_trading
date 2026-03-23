@@ -83,8 +83,8 @@ class StrategyAccountBalance(StrategyBase):
 
         message = (
             f"{format_balance(balance)}\n\n"
-            f"{format_margin(margin, self.config['margin_threshold_yellow'], self.config['margin_threshold_red'])}"
-            f"{format_positions(positions)}\n\n"
+            f"{format_margin(margin, self.config['margin_threshold_yellow'], self.config['margin_threshold_red'])}\n\n"
+            f"{format_positions(positions)}"
         )
 
         logger.info(message)
