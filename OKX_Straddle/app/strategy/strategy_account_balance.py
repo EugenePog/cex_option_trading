@@ -5,6 +5,7 @@ from app.telegram_bot import TelegramNotifier
 from app.cex_api.okx_account_functions import check_balance, check_positions
 from app.cex_api.okx_margin_functions import check_margin_threshold
 import functools
+from app.cex_api.okx_market_functions import get_current_token_price_by_inst_id, get_iv_by_inst_id_rest
 
 def format_balance(balance: dict) -> str:
     lines = ["💰 *Account Balance*"]
@@ -18,14 +19,34 @@ def format_positions(positions: list) -> str:
         return "📭 *No open positions*"
 
     lines = ["📊 *Opened Positions*"]
+    
+    total_upl = 0.0
+    total_fee = 0.0
+
     for i, pos in enumerate(positions):
-        upl = float(pos.get("upl", 0) or 0)
+        upl       = float(pos.get("upl", 0) or 0)
+        fee       = float(pos.get("fee", 0) or 0) if pos.get("fee") is not None else 0.0
         upl_emoji = "🟢" if upl >= 0 else "🔴"
+        iv        = pos.get("iv")
+        iv_str    = f"{iv['iv'] * 100:.2f}%" if iv else "n/a"
+        price_str = f"${pos['token_price']:,.2f}" if pos.get("token_price") else "n/a"
+
+        total_upl += upl
+        total_fee += fee
+
         lines.append(
-            f"{i+1}. `{pos.get('instId', '')}` | "
-            f"sz: {pos.get('size', '')} | px: {pos.get('avg_px', '')} | "
+            f"{i+1}. `{pos.get('instId', '')}` | Token price now: {price_str}\n"
+            f"sz: {pos.get('size', '')} | px: {pos.get('avg_px', '')} | iv: {iv_str} | "
             f"{upl_emoji} upl: {upl:.8f}"
         )
+
+    # Total line
+    net = total_upl + total_fee
+    net_emoji = "🟢" if net >= 0 else "🔴"
+    lines.append(
+        f"\n{net_emoji} *Total UPL (including fee):* `{net:.8f}`"
+    )
+
     return "\n".join(lines)
 
 
@@ -36,8 +57,8 @@ def format_margin(margin: dict, threshold_yellow: float, threshold_red: float) -
     lines = [
         f"📐 *Margin*",
         f"Status: {status_emoji.get(overall, '')} {overall}",
+        f"Thresholds: 🟡 {float(threshold_yellow)*100:.0f}% | 🔴 {float(threshold_red)*100:.0f}%",
         f"Total Equity: ${margin['total_equity_usd']:,.2f}",
-        f"Legend: 🟡 {float(threshold_yellow)*100:.0f}% | 🔴 {float(threshold_red)*100:.0f}%",
     ]
 
     for ccy, data in margin["currencies"].items():
@@ -80,6 +101,46 @@ class StrategyAccountBalance(StrategyBase):
                 threshold_red=self.config["margin_threshold_red"]
             )),
         )
+
+        # Fetch IV for all positions in parallel
+        iv_results = await asyncio.gather(*[
+            loop.run_in_executor(
+                None, get_iv_by_inst_id_rest,
+                self.api_key, self.api_secret, self.passphrase, self.flag,
+                pos.get("instId", "")
+            )
+            for pos in positions
+        ], return_exceptions=True)
+
+        # Get unique token keys from positions: "BTC-USD-260319-70500-C" → "BTC-USD"
+        unique_token_keys = list({
+            "-".join(pos.get("instId", "").split("-")[:2])
+            for pos in positions
+            if pos.get("instId")
+        })
+
+        # Fetch token price once per unique token key
+        token_price_results = await asyncio.gather(*[
+            loop.run_in_executor(
+                None, get_current_token_price_by_inst_id,
+                self.api_key, self.api_secret, self.passphrase, self.flag,
+                token_key   # "BTC-USD" directly
+            )
+            for token_key in unique_token_keys
+        ], return_exceptions=True)
+
+        # Build price lookup: "BTC-USD" -> price
+        price_lookup = {}
+        for token_key, result in zip(unique_token_keys, token_price_results):
+            if not isinstance(result, Exception) and result:
+                price_lookup[token_key] = result["price"]
+
+        # Embed IV and token price into each position dict
+        for pos, iv in zip(positions, iv_results):
+            pos["iv"] = None if isinstance(iv, Exception) or iv is None else iv
+
+            token_key          = "-".join(pos.get("instId", "").split("-")[:2])
+            pos["token_price"] = price_lookup.get(token_key)
 
         message = (
             f"{format_balance(balance)}\n\n"
