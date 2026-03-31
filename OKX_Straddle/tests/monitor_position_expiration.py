@@ -29,11 +29,10 @@ def get_delivery_price(api_key: str, api_secret: str, passphrase: str, flag: str
 
     if response.get("code") != "0" or not response.get("data"):
         return None
-
     # Find matching instId in delivery history
     for record in response.get("data", []):
         for detail in record.get("details", []):
-            if detail.get("instId") == inst_id:
+            if detail.get("insId") == inst_id:
                 return float(detail.get("px", 0) or 0)
 
     return None
