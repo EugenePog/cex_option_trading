@@ -236,14 +236,14 @@ async def handle_position_event(api_key: str, api_secret: str, passphrase: str, 
 
 # Usage
 if __name__ == "__main__":
-    #API_KEY = os.getenv("OKX_K_API_KEY")
-    #API_SECRET = os.getenv("OKX_K_API_SECRET")
-    #PASSPHRASE = os.getenv("OKX_K_PASSPHRASE")
-    #FLAG = os.getenv("OKX_K_FLAG")
+    API_KEY = os.getenv("OKX_K_API_KEY")
+    API_SECRET = os.getenv("OKX_K_API_SECRET")
+    PASSPHRASE = os.getenv("OKX_K_PASSPHRASE")
+    FLAG = os.getenv("OKX_K_FLAG")
 
-    API_KEY = os.getenv("OKX_API_KEY_DEMO")
-    API_SECRET = os.getenv("OKX_API_SECRET_DEMO")
-    PASSPHRASE = os.getenv("OKX_PASSPHRASE")
-    FLAG = os.getenv("OKX_FLAG")
+    #API_KEY = os.getenv("OKX_API_KEY_DEMO")
+    #API_SECRET = os.getenv("OKX_API_SECRET_DEMO")
+    #PASSPHRASE = os.getenv("OKX_PASSPHRASE")
+    #FLAG = os.getenv("OKX_FLAG")
 
     asyncio.run(listen_option_expiry(API_KEY, API_SECRET, PASSPHRASE, FLAG))

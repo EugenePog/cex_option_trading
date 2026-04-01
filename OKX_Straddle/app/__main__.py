@@ -7,12 +7,14 @@ from app.strategy.strategy_base import StrategyBase
 from app.strategy.strategy_straddle_short import StrategyStraddleShort
 from app.strategy.strategy_margin_control import StrategyMarginControl
 from app.strategy.strategy_account_balance import StrategyAccountBalance
+from app.strategy.strategy_option_expiry_monitor import StrategyOptionExpiryMonitor
 from app.functions import parse_args
 
 STRATEGY_CLASS_MAP = {
     "margin_control_strategy":  StrategyMarginControl,   # class object here, not string
     "account_balance_strategy": StrategyAccountBalance,
     "straddle_short_strategy":  StrategyStraddleShort,
+    "option_expiry_monitor_strategy": StrategyOptionExpiryMonitor,
 }
 
 class StrategyMonitor:
@@ -65,10 +67,10 @@ class StrategyMonitor:
             if cls:
                 # there is no config transformation for now. Placeholder for possible future mappings
                 config_transformed = {
-                    "run_flag": config["run_flag"],
-                    "margin_threshold_yellow": config["margin_threshold_yellow"],
-                    "margin_threshold_red": config["margin_threshold_red"],
-                    "check_interval": config["check_interval"]
+                    "run_flag":                config.get("run_flag", 0),
+                    "margin_threshold_yellow": config.get("margin_threshold_yellow", 0),
+                    "margin_threshold_red":    config.get("margin_threshold_red", 0),
+                    "check_interval":          config.get("check_interval", 0),
                     # add other config mapping here
                 }
 
@@ -169,8 +171,7 @@ class StrategyMonitor:
 
         except Exception as e:
             logger.error(f"Error in monitoring loop iteration: {e}", exc_info=True)
-            # Wait and continue the next iteration despite errors
-            await asyncio.sleep(self.check_interval_margin_control)
+            raise  # re-raise — caught by main() which handles restart
 
         
 

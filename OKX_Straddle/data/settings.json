@@ -11,6 +11,9 @@
     "margin_threshold_yellow": 2.0,
     "margin_threshold_red": 1.5
   },
+  "option_expiry_monitor_strategy": {
+    "run_flag": 1
+  },
   "BTC": {
     "okx_position_size_multiplier": 100,
     "straddle_short_strategy": {
