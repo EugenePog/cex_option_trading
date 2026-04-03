@@ -113,6 +113,11 @@ async def listen_option_expiry(api_key: str, api_secret: str, passphrase: str, f
 
                         channel = data.get("arg", {}).get("channel")
                         items   = data.get("data", [])
+                        
+                        # For testing
+                        print("\n\n")
+                        print(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'))
+                        #
 
                         for item in items:
                             if channel == "positions":
@@ -200,14 +205,24 @@ async def handle_position_event(api_key: str, api_secret: str, passphrase: str, 
     inst_id = item.get("instId", "")
     pos     = float(item.get("pos", 0) or 0)
     pnl     = float(item.get("realizedPnl", 0) or 0)
-
+    
+    # For testing
+    print("\n")
+    print(f"{item}")
+    #
+    
     prev_pos = known_positions.get(inst_id)
 
-    if pos == 0.0 and prev_pos is not None and prev_pos != 0.0:
-        delivery_px = get_delivery_price(api_key, api_secret, passphrase, flag, inst_id)
+    if 1==1: #if pos == 0.0 and prev_pos is not None and prev_pos != 0.0:
+        delivery_px = float(item.get("idxPx", 0) or 0) #get_delivery_price(api_key, api_secret, passphrase, flag, inst_id)
         px_str      = f"${delivery_px:,.2f}" if delivery_px else "n/a"
 
-        print(f"🔔 Position CLOSED: {inst_id} | expiry px: {px_str} | realized PnL: {pnl:.8f}")
+        # Get PnL from bills — realizedPnl not in WebSocket event
+        pnl = get_pnl_from_bills(api_key, api_secret, passphrase, flag, 'BTC-USD-260403-67000-P')#inst_id)
+        print(f"PnL: {pnl}")
+        pnl_str = f"{pnl:.8f}" if pnl is not None else "n/a"
+
+        print(f"🔔 Position CLOSED: {inst_id} | expiry px: {px_str} | realized PnL: {pnl_str}")
 
         session_pnl["total_pnl"]    += pnl
         session_pnl["closed_count"] += 1
@@ -232,7 +247,32 @@ async def handle_position_event(api_key: str, api_secret: str, passphrase: str, 
         if pos != 0.0:
             known_positions[inst_id] = pos
 
+def get_pnl_from_bills(api_key: str, api_secret: str, passphrase: str, flag: str, inst_id: str) -> float | None:
+    """Get realized PnL for a closed position from account bills"""
+    import okx.Account as Account
 
+    account_api = Account.AccountAPI(
+        api_key, api_secret, passphrase,
+        use_server_time=False, flag=flag
+    )
+
+    # subType 172 = expired OTM (profit), 171 = exercised/expired ITM (loss)
+    response = account_api.get_account_bills(
+        instType="OPTION",
+        limit="50"
+    )
+
+    #print(f"{response}")
+
+    if response.get("code") != "0" or not response.get("data"):
+        return None
+
+    # Find delivery/expiry bill for this instId
+    for bill in response.get("data", []):
+        if bill.get("instId") == inst_id and bill.get("type") == "3":  # type 3 = delivery
+            return float(bill.get("pnl", 0) or 0)
+
+    return None
 
 # Usage
 if __name__ == "__main__":

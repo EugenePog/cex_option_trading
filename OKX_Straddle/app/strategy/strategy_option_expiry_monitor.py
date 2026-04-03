@@ -137,14 +137,17 @@ class StrategyOptionExpiryMonitor(StrategyBase):
         prev_pos = self.known_positions.get(inst_id)
 
         if pos == 0.0 and prev_pos is not None and prev_pos != 0.0:
-            delivery_px = await asyncio.get_event_loop().run_in_executor(
-                None, self._get_delivery_price, inst_id
-            )
+
+            delivery_px = float(item.get("idxPx", 0) or 0)
             px_str = f"${delivery_px:,.2f}" if delivery_px else "n/a"
 
-            logger.info(f"[ExpiryMonitor] 🔔 CLOSED: {inst_id} | px: {px_str} | PnL: {pnl:.8f}")
+            # Get PnL from bills — realizedPnl not in WebSocket event
+            pnl = await asyncio.get_event_loop().run_in_executor(None, self._get_pnl_from_bills, inst_id)
+            pnl_str = f"{pnl:.8f}" if pnl is not None else "n/a"
 
-            self.session_pnl["total_pnl"]    += pnl
+            logger.info(f"[ExpiryMonitor] 🔔 CLOSED: {inst_id} | px: {px_str} | PnL: {pnl_str}")
+
+            self.session_pnl["total_pnl"]    += pnl or 0
             self.session_pnl["closed_count"] += 1
             self.session_pnl["closed_legs"].append({
                 "instId":      inst_id,
@@ -164,23 +167,28 @@ class StrategyOptionExpiryMonitor(StrategyBase):
         else:
             if pos != 0.0:
                 self.known_positions[inst_id] = pos
+    
+    def _get_pnl_from_bills(self, inst_id: str) -> float | None:
+        """Get realized PnL for a closed position from account bills"""
+        import okx.Account as Account
 
-    def _get_delivery_price(self, inst_id: str) -> float | None:
-        public_api = PublicData.PublicAPI(
+        account_api = Account.AccountAPI(
             self.api_key, self.api_secret, self.passphrase,
             use_server_time=False, flag=self.flag
         )
-        parts    = inst_id.split("-")
-        uly      = f"{parts[0]}-{parts[1]}"
-        response = public_api.get_delivery_exercise_history(
-            instType="OPTION", uly=uly, limit="10"
+
+        response = account_api.get_account_bills(
+            instType="OPTION",
+            limit="50"          # fetch recent bills and filter manually
         )
+
         if response.get("code") != "0" or not response.get("data"):
             return None
-        for record in response.get("data", []):
-            for detail in record.get("details", []):
-                if detail.get("insId") == inst_id or detail.get("instId") == inst_id:
-                    return float(detail.get("px", 0) or 0)
+
+        for bill in response.get("data", []):
+            if bill.get("instId") == inst_id and bill.get("type") == "3":  # type 3 = delivery
+                return float(bill.get("pnl", 0) or 0)
+
         return None
 
     async def _check_and_notify_expiry_summary(self):
@@ -206,16 +214,18 @@ class StrategyOptionExpiryMonitor(StrategyBase):
 
             lines = [f"*OPTION EXPIRATION:* {expiry_key}"]
             lines.append(f"{emoji} Total PnL: {total_pnl:.8f}\n")
+            lines.append(f"Expiration price: ${legs[0]['delivery_px']:,.2f}\n" if legs[0]['delivery_px'] else "Expiration price: n/a\n")
+            lines.append(f"Expiration time: {legs[0]['time']}\n" if legs[0]['time'] else "Expiration time: n/a\n")  
+            
             for leg in sorted(legs, key=lambda x: x["instId"]):
-                px_str = f"${leg['delivery_px']:,.2f}" if leg["delivery_px"] else "n/a"
                 pnl_e  = "🟢" if leg["pnl"] >= 0 else "🔴"
                 lines.append(
                     f"{pnl_e} {leg['instId']}\n"
-                    f"px: {px_str} | PnL: {leg['pnl']:.8f} | {leg['time']}"
+                    f"PnL: {leg['pnl']:.8f}"
                 )
 
             message = "\n".join(lines)
             logger.info(f"[ExpiryMonitor]\n{message}")
-            await self.notifier.send_message(message)
+            await self.notifier.send_message(message, parse_mode="Markdown")
 
             self.session_pnl["printed_expiries"].add(expiry_key)
