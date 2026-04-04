@@ -142,6 +142,8 @@ class StrategyOptionExpiryMonitor(StrategyBase):
             px_str = f"${delivery_px:,.2f}" if delivery_px else "n/a"
 
             # Get PnL from bills — realizedPnl not in WebSocket event
+            # Wait for 15 sec for bills to settle before fetching
+            await asyncio.sleep(15)
             pnl = await asyncio.get_event_loop().run_in_executor(None, self._get_pnl_from_bills, inst_id)
             pnl_str = f"{pnl:.8f}" if pnl is not None else "n/a"
 
@@ -151,7 +153,7 @@ class StrategyOptionExpiryMonitor(StrategyBase):
             self.session_pnl["closed_count"] += 1
             self.session_pnl["closed_legs"].append({
                 "instId":      inst_id,
-                "pnl":         pnl,
+                "pnl":         pnl or 0,
                 "delivery_px": delivery_px,
                 "time":        datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
             })
@@ -209,7 +211,7 @@ class StrategyOptionExpiryMonitor(StrategyBase):
             if expiry_key in self.session_pnl["printed_expiries"]:
                 continue
 
-            total_pnl = sum(l["pnl"] for l in legs)
+            total_pnl = sum(l["pnl"] or 0 for l in legs)
             emoji     = "🟢" if total_pnl >= 0 else "🔴"
 
             lines = [f"*OPTION EXPIRATION:* {expiry_key}"]
