@@ -24,10 +24,14 @@ def format_position_message(position: dict, token_price: dict = None, call_iv: d
         data = position.get(leg)
         if data:
             state = data.get("state", "")
+            
+            # Tune size *(-1) as it is SHORT positions
+            size = float(data.get('fill_sz', '0')) * (-1)
+            
             lines.append(
                 f"\n*{leg.upper()}* `{data.get('instId', '')}`\n"
                 f"{state_emoji.get(state, '')} {state} | "
-                f"sz: {data.get('fill_sz', '')} | "
+                f"sz: {size} | "
                 f"px: {data.get('avg_px', '')} | "
                 f"fee: {data.get('fee', '')}\n"
                 f"🕐 {data.get('fill_time', '')}"

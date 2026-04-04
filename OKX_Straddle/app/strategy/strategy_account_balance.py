@@ -19,6 +19,8 @@ def format_positions(positions: list) -> str:
         return "📭 *No open positions*"
 
     lines = ["📊 *Opened Positions*"]
+    price_str = f"${positions[0]['token_price']:,.2f}" if positions[0].get("token_price") else "n/a"
+    lines.append(f"Token price now: {price_str}\n")
     
     total_upl = 0.0
     total_fee = 0.0
@@ -26,18 +28,15 @@ def format_positions(positions: list) -> str:
     for i, pos in enumerate(positions):
         upl       = float(pos.get("upl", 0) or 0)
         fee       = float(pos.get("fee", 0) or 0) if pos.get("fee") is not None else 0.0
-        upl_emoji = "🟢" if upl >= 0 else "🔴"
-        iv        = pos.get("iv")
-        iv_str    = f"{iv['iv'] * 100:.2f}%" if iv else "n/a"
-        price_str = f"${pos['token_price']:,.2f}" if pos.get("token_price") else "n/a"
+        upl_with_fee = upl + fee
+        upl_emoji = "🟢" if upl_with_fee >= 0 else "🔴"
 
         total_upl += upl
         total_fee += fee
 
         lines.append(
-            f"{i+1}. `{pos.get('instId', '')}` | Token price now: {price_str}\n"
-            f"sz: {pos.get('size', '')} | px: {pos.get('avg_px', '')} | iv: {iv_str} | "
-            f"{upl_emoji} upl: {upl:.8f}"
+            f"{i+1}. `{pos.get('instId', '')}` | sz: {pos.get('size', '')}\n"
+            f"{upl_emoji} Leg UPL (including fee): {upl_with_fee:.8f}"
         )
 
     # Total line
