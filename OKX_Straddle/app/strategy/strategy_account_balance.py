@@ -20,7 +20,8 @@ def format_positions(positions: list) -> str:
 
     lines = ["📊 *Opened Positions*"]
     price_str = f"${positions[0]['token_price']:,.2f}" if positions[0].get("token_price") else "n/a"
-    lines.append(f"Token price now: {price_str}\n")
+    token_name = positions[0]['instId'].split("-")[0]
+    lines.append(f"{token_name} price now: {price_str}\n")
     
     total_upl = 0.0
     total_fee = 0.0
@@ -36,14 +37,14 @@ def format_positions(positions: list) -> str:
 
         lines.append(
             f"{i+1}. `{pos.get('instId', '')}` | sz: {pos.get('size', '')}\n"
-            f"{upl_emoji} Leg UPL (including fee): {upl_with_fee:.8f}"
+            f"{upl_emoji} Leg UPL: {upl_with_fee:.8f}"
         )
 
     # Total line
     net = total_upl + total_fee
     net_emoji = "🟢" if net >= 0 else "🔴"
     lines.append(
-        f"\n{net_emoji} *Total UPL (including fee):* `{net:.8f}`"
+        f"\n{net_emoji} *Total UPL:* `{net:.8f}`"
     )
 
     return "\n".join(lines)
@@ -55,8 +56,6 @@ def format_margin(margin: dict, threshold_yellow: float, threshold_red: float) -
 
     lines = [
         f"📐 *Margin*",
-        f"Status: {status_emoji.get(overall, '')} {overall}",
-        f"Thresholds: 🟡 {float(threshold_yellow)*100:.0f}% | 🔴 {float(threshold_red)*100:.0f}%",
         f"Total Equity: ${margin['total_equity_usd']:,.2f}",
     ]
 
