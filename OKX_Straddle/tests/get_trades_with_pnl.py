@@ -133,17 +133,17 @@ def combine_straddle_trades(trades: list) -> list:
         call_expiry = expiries.get(call["instId"]) if call else None
         put_expiry  = expiries.get(put["instId"])  if put  else None
 
-        open_pnl  = (call.get("bal_chg", 0) or 0) + (put.get("bal_chg", 0) or 0) if call and put else \
+        open_premium  = (call.get("bal_chg", 0) or 0) + (put.get("bal_chg", 0) or 0) if call and put else \
                     (call.get("bal_chg", 0) or 0) if call else (put.get("bal_chg", 0) or 0)
         call_pnl = (call_expiry.get("pnl", 0) or 0 if call_expiry else 0)
         put_pnl = (put_expiry.get("pnl", 0)  or 0 if put_expiry  else 0)
-        close_pnl = (call_expiry.get("pnl", 0) or 0 if call_expiry else 0) + \
-                    (put_expiry.get("pnl", 0)  or 0 if put_expiry  else 0)
+        close_pnl = (call_expiry.get("bal_chg", 0) or 0 if call_expiry else 0) + \
+                    (put_expiry.get("bal_chg", 0)  or 0 if put_expiry  else 0)
         total_fee = (call.get("fee", 0) or 0 if call else 0) + \
                     (put.get("fee", 0)  or 0 if put  else 0) + \
                     (call_expiry.get("fee", 0) or 0 if call_expiry else 0) + \
                     (put_expiry.get("fee", 0)  or 0 if put_expiry  else 0)
-        net_pnl = close_pnl + total_fee
+        net_pnl = open_premium + close_pnl
 
         straddles.append({
             "call_instId":     call["instId"] if call else "-",
@@ -156,7 +156,7 @@ def combine_straddle_trades(trades: list) -> list:
             "put_expiry":      put_expiry["action"]  if put_expiry  else "-",
             "call_expiry_pnl": call_expiry["pnl"] if call_expiry else 0,
             "put_expiry_pnl":  put_expiry["pnl"]  if put_expiry  else 0,
-            "open_premium":    round(open_pnl, 8),
+            "open_premium":    round(open_premium, 8),
             "close_pnl":       round(close_pnl, 8),
             "fee":             round(total_fee, 8),
             "net_pnl":         round(net_pnl, 8)

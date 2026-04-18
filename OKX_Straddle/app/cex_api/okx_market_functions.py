@@ -6,6 +6,7 @@ import hmac
 import hashlib
 import base64
 
+# becomes redundant, to be replaced by get_token_price function for all usages
 def get_current_token_price_by_inst_id(
         api_key:    str,
         api_secret: str,

@@ -170,20 +170,40 @@ def get_otm_next_expiry(
         "otm_pct":       round(distance_pct, 4)
     }
 
-
-def get_token_price(marketAPI, token: str, price_time: str = None) -> float:
+# move to okx_market_functions
+def get_token_price(
+        api_key:    str,
+        api_secret: str,
+        passphrase: str,
+        flag:       str, 
+        inst_id: str, 
+        price_time: str = None) -> float:
     """
     Get token index price.
 
     Args:
-        marketAPI  : OKX MarketAPI instance
-        token      : token symbol e.g. "BTC"
+        api_key:    str,
+        api_secret: str,
+        passphrase: str,
+        flag:       str,
+        inst_id    : token symbol or full OKX instrument ID.
+                     Examples:
+                       - "BTC"                        → base token "BTC"
+                       - "BTC-USD-260319-70500-C"     → base token "BTC"
         price_time : if None - returns current price
                      if set (e.g. "8:00", "14:30") - returns price at that UTC time today
 
     Returns:
         float: token price
     """
+    marketAPI = MarketData.MarketAPI(
+        api_key, api_secret, passphrase,
+        use_server_time=False, flag=flag
+    )
+
+    # Extract base token: "BTC-USD-260319-70500-C" → "BTC", "BTC" → "BTC"
+    token = inst_id.split("-")[0]
+
     if price_time is None:
         # --- Current price ---
         ticker = marketAPI.get_index_tickers(instId=f"{token}-USD")
@@ -291,9 +311,9 @@ def get_available_near_money_options(
     # ----------------------------------------------------------------
     current_price = None
     if price_time_flag == "CURRENT":
-        current_price = get_token_price(marketAPI, token)
+        current_price = get_token_price(api_key, api_secret, passphrase, flag, token)
     elif price_time_flag == "FIXED":
-        current_price = get_token_price(marketAPI, token, price_time)
+        current_price = get_token_price(api_key, api_secret, passphrase, flag, token, price_time)
 
     # ----------------------------------------------------------------
     # Step 2: Build target expiry string

@@ -189,7 +189,7 @@ class StrategyOptionExpiryMonitor(StrategyBase):
 
         for bill in response.get("data", []):
             if bill.get("instId") == inst_id and bill.get("type") == "3":  # type 3 = delivery
-                return float(bill.get("pnl", 0) or 0)
+                return float(bill.get("balChg", 0) or 0)
 
         return None
 

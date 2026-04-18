@@ -2,18 +2,18 @@ from app.functions import is_within_timeframe, is_allowed_day
 from app.strategy.strategy_base import StrategyBase
 import asyncio
 from app import logger
-from app.cex_api.okx_functions import open_position, close_all_open_options, get_option_summary, get_available_near_money_options
+from app.cex_api.okx_functions import open_position, close_all_open_options, get_option_summary, get_available_near_money_options, get_token_price
 from app.functions import save_filled_orders_to_csv
 from app.cex_api.okx_market_functions import get_current_token_price_by_inst_id, get_iv_by_inst_id_rest
 
-def format_position_message(position: dict, token_price: dict = None, call_iv: dict = None, put_iv: dict = None) -> str:
+def format_position_message(position: dict, token_price: float = None, call_iv: dict = None, put_iv: dict = None) -> str:
     state_emoji = {"filled": "✅", "cancelled": "❌", "mmp_canceled": "❌", "live": "⏳", "timeout": "⏳", "partially_filled": "🔄"}
     
     lines = ["📋 *StrategyStraddleShort — Opened Positions*"]
 
     # Market context
     if token_price:
-        lines.append(f"\n💰 Price: `${token_price['price']:,.2f}`")
+        lines.append(f"\n💰 Price: `${token_price:,.2f}`")
     if call_iv:
         lines.append(f"📈 Call IV: `{call_iv['iv'] * 100:.4f}%`")
     if put_iv:
@@ -111,11 +111,20 @@ class StrategyStraddleShort(StrategyBase):
             if position and position.get("status") != "error":
                 save_filled_orders_to_csv("StrategyStraddleShort", position, "SHORT", self.config["executed_orders_path"])
             
-                token_price = await loop.run_in_executor(
-                    None, get_current_token_price_by_inst_id,
-                    self.api_key, self.api_secret, self.passphrase, self.flag,
-                    closest_call["instId"]   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
-                )
+                token_price = None
+                if self.config["price_time_flag"] == "FIXED":
+                    token_price = await loop.run_in_executor(
+                        None, get_token_price,
+                        self.api_key, self.api_secret, self.passphrase, self.flag,
+                        closest_call["instId"],   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
+                        self.config["price_time"]
+                    )
+                else:
+                    token_price = await loop.run_in_executor(
+                        None, get_token_price,
+                        self.api_key, self.api_secret, self.passphrase, self.flag,
+                        closest_call["instId"]   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
+                    )
 
                 call_iv = await loop.run_in_executor(
                     None, get_iv_by_inst_id_rest,
