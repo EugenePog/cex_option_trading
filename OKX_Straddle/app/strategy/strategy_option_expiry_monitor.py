@@ -185,13 +185,52 @@ class StrategyOptionExpiryMonitor(StrategyBase):
         )
 
         if response.get("code") != "0" or not response.get("data"):
+            logger.warning(f"Failed to fetch bills for {inst_id}")
             return None
 
-        for bill in response.get("data", []):
-            if bill.get("instId") == inst_id and bill.get("type") == "3":  # type 3 = delivery
-                return float(bill.get("balChg", 0) or 0)
-
-        return None
+        # ----------------------------------------------------------------
+        # Collect all bills related to this instrument
+        # ----------------------------------------------------------------
+        relevant_bills = [
+            bill for bill in response.get("data", [])
+            if bill.get("instId") == inst_id
+        ]
+        
+        if not relevant_bills:
+            logger.warning(f"No bills found for {inst_id}")
+            return None
+        
+        # ----------------------------------------------------------------
+        # Sum balChg across all relevant bill types
+        # ----------------------------------------------------------------
+        pnl_from_1_instr = 0.0
+        
+        for bill in relevant_bills:
+            bill_type = bill.get("type", "")
+            bal_chg   = float(bill.get("balChg", 0) or 0)
+            pnl       = float(bill.get("pnl", 0) or 0)
+            sub_type  = bill.get("subType", "")
+            
+            # Log each bill for debugging
+            logger.debug(
+                f"Bill for {inst_id}: type={bill_type}, subType={sub_type}, "
+                f"balChg={bal_chg}, pnl={pnl}"
+            )
+            
+            # ----------------------------------------------------------------
+            # Bill types that contribute to PnL:
+            # type "1" = transfer (includes opening premium)
+            # type "2" = trade (buy/sell of option)
+            # type "3" = delivery (expiry settlement)
+            # type "8" = fee (trading fees - negative impact)
+            # ----------------------------------------------------------------
+            if bill_type in ["1", "2", "3", "8"]:
+                # balChg is the actual balance change in settlement currency (BTC/ETH)
+                pnl_from_1_instr += bal_chg
+        
+        logger.info(f"Total realized PnL for {inst_id}: {pnl_from_1_instr} (from {len(relevant_bills)} bills)")
+        
+        return pnl_from_1_instr
 
     async def _check_and_notify_expiry_summary(self):
         closed_by_expiry = defaultdict(list)

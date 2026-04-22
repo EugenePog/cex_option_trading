@@ -225,6 +225,11 @@ if __name__ == "__main__":
     PASSPHRASE = os.getenv("OKX_K_PASSPHRASE")
     FLAG = os.getenv("OKX_K_FLAG")
 
+    #API_KEY = os.getenv("OKX_API_KEY_DEMO")
+    #API_SECRET = os.getenv("OKX_API_SECRET_DEMO")
+    #PASSPHRASE = os.getenv("OKX_PASSPHRASE")
+    #FLAG = os.getenv("OKX_FLAG")
+
     raw    = get_trades_history(API_KEY, API_SECRET, PASSPHRASE, FLAG, inst_type="OPTION")
     trades = parse_trades(raw)
     print_trades(trades)
