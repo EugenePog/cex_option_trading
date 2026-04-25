@@ -339,11 +339,14 @@ def get_available_near_money_options(
     # ----------------------------------------------------------------
     # Step 4: Filter — expiring on target date + allowed strikes only
     # ----------------------------------------------------------------
+    # Build the exact prefix we want, e.g. "BTC-USD-260426-" (to exclude new series like "BTC-USD_UM-260426-" etc.)
+    expected_prefix = f"{token}-USD-{expiry_str}-"
+    
     allowed_strike_set = set(available_strikes)
 
     filtered_instruments = [
         inst for inst in all_instruments
-        if expiry_str in inst["instId"]
+        if inst["instId"].startswith(expected_prefix)
         and float(inst["stk"]) in allowed_strike_set
     ]
 
