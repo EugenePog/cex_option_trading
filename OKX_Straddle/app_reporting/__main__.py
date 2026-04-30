@@ -9,7 +9,7 @@ import sys
 import time
 from types import FrameType
 
-from . import config
+from . import config, notifier
 from .csv_store import save as save_straddles
 from .gdrive import upload_csv_as_gsheet
 from .gsheets import add_pnl_waterfall_chart
@@ -41,6 +41,12 @@ def _stop(signum: int, _frame: FrameType | None) -> None:
 signal.signal(signal.SIGTERM, _stop)
 signal.signal(signal.SIGINT, _stop)
 
+# --- Notification message -------------------------------------------------
+def _build_summary_message(sheet_url: str) -> str:
+    return (
+        "✅ *OKX Straddles Report Updated*\n\n"
+        f"[Open Sheet]({sheet_url})"
+    )
 
 # --- Core cycle -----------------------------------------------------------
 def run_once() -> None:
@@ -54,12 +60,14 @@ def run_once() -> None:
 
     save_straddles(straddles, config.STRADDLES_CSV)
 
-    sheet_id = upload_csv_as_gsheet(
+    sheet_id, sheet_url = upload_csv_as_gsheet(
         csv_path=str(config.STRADDLES_CSV),
         sheet_name=config.GSHEET_NAME,
         folder_id=config.GDRIVE_FOLDER_ID,
     )
     add_pnl_waterfall_chart(sheet_id)
+
+    notifier.send(_build_summary_message(sheet_url))
 
     log.info("=== Reporting cycle done ===")
 

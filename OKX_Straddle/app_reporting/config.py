@@ -29,6 +29,10 @@ GOOGLE_SCOPES = [
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
 GSHEET_NAME      = os.getenv("GSHEET_NAME", "OKX_straddles_history")
 
+# --- Telegram ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID_OKX_STRADDLE")
+
 # --- Scheduler ---
 # How often the long-running loop refreshes the report, in seconds.
 REPORT_INTERVAL_SEC = int(os.getenv("REPORT_INTERVAL_SEC", "3600"))

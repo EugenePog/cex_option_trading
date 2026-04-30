@@ -12,7 +12,12 @@ SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 
 
 def upload_csv_as_gsheet(csv_path: str, sheet_name: str | None = None,
-                         folder_id: str | None = None) -> str:
+                         folder_id: str | None = None) -> tuple[str, str]:
+    """Upload-or-replace ``csv_path`` as a Google Sheet.
+
+    Returns:
+        ``(file_id, web_view_link)`` — the link is the user-facing URL.
+    """
     service = build("drive", "v3", credentials=get_credentials())
     name = sheet_name or os.path.splitext(os.path.basename(csv_path))[0]
 
@@ -41,4 +46,4 @@ def upload_csv_as_gsheet(csv_path: str, sheet_name: str | None = None,
         ).execute()
         log.info("Created new sheet: %s", f.get("webViewLink"))
 
-    return f["id"]
+    return f["id"], f.get("webViewLink", "")

@@ -144,6 +144,8 @@ ENV/
 env.bak/
 venv.bak/
 OKX_Straddle/.env
+OKX_Straddle/credentials.json
+OKX_Straddle/token.json
 
 # Spyder project settings
 .spyderproject
