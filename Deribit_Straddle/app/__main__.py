@@ -27,7 +27,7 @@ class StrategyMonitor:
             self.flag = os.getenv("OKX_K_FLAG")
             # Telegram credentials
             self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE')
+            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_DERIBIT_STRADDLE')
         elif env == "test":
             # OKX keys
             self.api_key = os.getenv("OKX_API_KEY_DEMO")
@@ -36,7 +36,7 @@ class StrategyMonitor:
             self.flag = os.getenv("OKX_FLAG")
             # Telegram credentials
             self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN_TEST')
-            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_OKX_STRADDLE_TEST')
+            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_DERIBIT_STRADDLE_TEST')
 
         self.tokens = configuration.LIST_OF_TOKENS
         

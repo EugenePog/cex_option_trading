@@ -27,11 +27,11 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
 ]
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
-GSHEET_NAME      = os.getenv("GSHEET_NAME", "OKX_straddles_history")
+GSHEET_NAME      = os.getenv("GSHEET_NAME", "Deribit_straddles_history")
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID_OKX_STRADDLE")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID_DERIBIT_STRADDLE")
 
 # --- Scheduler ---
 # How often the long-running loop refreshes the report, in seconds.

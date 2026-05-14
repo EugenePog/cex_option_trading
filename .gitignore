@@ -146,6 +146,9 @@ venv.bak/
 OKX_Straddle/.env
 OKX_Straddle/credentials.json
 OKX_Straddle/token.json
+Deribit_Straddle/.env
+Deribit_Straddle/credentials.json
+Deribit_Straddle/token.json
 
 # Spyder project settings
 .spyderproject
@@ -211,3 +214,4 @@ __marimo__/
 
 # Data folders
 OKX_Straddle/data/
+Deribit_Straddle/data/
