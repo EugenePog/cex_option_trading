@@ -20,11 +20,10 @@ class StrategyOptionExpiryMonitor(StrategyBase):
         self.config     = config
         self.api_key    = api_credentials["api_key"]
         self.api_secret = api_credentials["api_secret"]
-        self.passphrase = api_credentials["passphrase"]
         self.flag       = api_credentials["flag"]
         self.notifier   = TelegramNotifier(
             api_credentials["telegram_bot_token"],
-            api_credentials["telegram_chat_id_okx_straddle"]
+            api_credentials["telegram_chat_id"]
         )
         self.check_interval = 0  # not used — this strategy runs continuously
 
@@ -102,7 +101,6 @@ class StrategyOptionExpiryMonitor(StrategyBase):
             "op": "login",
             "args": [{
                 "apiKey":     self.api_key,
-                "passphrase": self.passphrase,
                 "timestamp":  timestamp,
                 "sign":       signature
             }]
@@ -175,7 +173,7 @@ class StrategyOptionExpiryMonitor(StrategyBase):
         import okx.Account as Account
 
         account_api = Account.AccountAPI(
-            self.api_key, self.api_secret, self.passphrase,
+            self.api_key, self.api_secret, 
             use_server_time=False, flag=self.flag
         )
 

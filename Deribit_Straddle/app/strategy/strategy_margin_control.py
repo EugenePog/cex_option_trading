@@ -23,9 +23,8 @@ class StrategyMarginControl(StrategyBase):
         self.config = config
         self.api_key = api_credentials["api_key"]
         self.api_secret = api_credentials["api_secret"]
-        self.passphrase = api_credentials["passphrase"]
         self.flag = api_credentials["flag"]
-        self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id_okx_straddle"])
+        self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id"])
         self.check_interval = config["check_interval"]
 
     async def should_run(self) -> bool:
@@ -37,7 +36,7 @@ class StrategyMarginControl(StrategyBase):
         result = await loop.run_in_executor(
             None, functools.partial(
                 check_margin_threshold,
-                self.api_key, self.api_secret, self.passphrase, self.flag,
+                self.api_key, self.api_secret, self.flag,
                 threshold_yellow=self.config["margin_threshold_yellow"],
                 threshold_red=self.config["margin_threshold_red"]
             )

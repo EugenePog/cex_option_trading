@@ -64,12 +64,12 @@ class StrategyStraddleShort(StrategyBase):
         await self._close_all_open_orders()
 
         # Get position size from settings
-        call_size = int(self.config["amount"] * self.config["okx_position_size_multiplier"])
+        call_size = int(self.config["amount"] * self.config["deribit_position_size_multiplier"])
         put_size = call_size
 
         summary = await loop.run_in_executor(
             None, get_option_summary,
-            self.api_key, self.api_secret, self.passphrase, self.flag,
+            self.api_key, self.api_secret, self.flag,
             self.token, "SHORT"
         )
 
@@ -83,7 +83,7 @@ class StrategyStraddleShort(StrategyBase):
         # Define put call IDs for positions to be opened
         closest = await loop.run_in_executor(
             None, get_available_near_money_options,
-            self.api_key, self.api_secret, self.passphrase, self.flag,
+            self.api_key, self.api_secret, self.flag,
             self.token, self.config["allowed_strikes"], 1,
             self.config["price_time_flag"], self.config["price_time"]
         )
@@ -101,7 +101,7 @@ class StrategyStraddleShort(StrategyBase):
                 None, open_position,
                 closest_call["instId"], closest_put["instId"],
                 call_to_open, put_to_open,
-                self.api_key, self.api_secret, self.passphrase, self.flag,
+                self.api_key, self.api_secret, self.flag,
                 self.config["slippage_tolerance"],
                 self.config["bid_ask_threshold"],
                 "SHORT"
@@ -115,26 +115,26 @@ class StrategyStraddleShort(StrategyBase):
                 if self.config["price_time_flag"] == "FIXED":
                     token_price = await loop.run_in_executor(
                         None, get_token_price,
-                        self.api_key, self.api_secret, self.passphrase, self.flag,
+                        self.api_key, self.api_secret, self.flag,
                         closest_call["instId"],   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
                         self.config["price_time"]
                     )
                 else:
                     token_price = await loop.run_in_executor(
                         None, get_token_price,
-                        self.api_key, self.api_secret, self.passphrase, self.flag,
+                        self.api_key, self.api_secret, self.flag,
                         closest_call["instId"]   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
                     )
 
                 call_iv = await loop.run_in_executor(
                     None, get_iv_by_inst_id_rest,
-                    self.api_key, self.api_secret, self.passphrase, self.flag,
+                    self.api_key, self.api_secret, self.flag,
                     closest_call["instId"]
                 )
 
                 put_iv = await loop.run_in_executor(
                     None, get_iv_by_inst_id_rest,
-                    self.api_key, self.api_secret, self.passphrase, self.flag,
+                    self.api_key, self.api_secret, self.flag,
                     closest_put["instId"]
                 )
 
@@ -147,7 +147,7 @@ class StrategyStraddleShort(StrategyBase):
         for attempt in range(1, 11):
             response = await loop.run_in_executor(
                 None, close_all_open_options,
-                self.api_key, self.api_secret, self.passphrase, self.flag, self.token
+                self.api_key, self.api_secret, self.flag, self.token
             )
             if response.get("status") == "ok" and (len(response.get("cancelled", [])) > 0):
                 logger.info(f"[ShortStraddle] Orders closed on attempt {attempt}")

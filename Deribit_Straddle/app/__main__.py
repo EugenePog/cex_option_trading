@@ -20,27 +20,25 @@ STRATEGY_CLASS_MAP = {
 class StrategyMonitor:
     def __init__(self, env: str = "test"):
         if env == "prod":
-            # OKX keys
-            self.api_key = os.getenv("OKX_K_API_KEY")
-            self.api_secret = os.getenv("OKX_K_API_SECRET")
-            self.passphrase = os.getenv("OKX_K_PASSPHRASE")
-            self.flag = os.getenv("OKX_K_FLAG")
+            # Deribit keys
+            self.api_key = os.getenv("DERIBIT_K_CLIENT_ID")
+            self.api_secret = os.getenv("DERIBIT_K_CLIENT_SECRET")
+            self.flag = os.getenv("DERIBIT_K_CLIENT_FLAG", "1")
             # Telegram credentials
             self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_DERIBIT_STRADDLE')
+            self.telegram_chat_id_deribit_straddle = os.getenv('TELEGRAM_CHAT_ID_DERIBIT_STRADDLE')
         elif env == "test":
-            # OKX keys
-            self.api_key = os.getenv("OKX_API_KEY_DEMO")
-            self.api_secret = os.getenv("OKX_API_SECRET_DEMO")
-            self.passphrase = os.getenv("OKX_PASSPHRASE")
-            self.flag = os.getenv("OKX_FLAG")
+            # Deribit keys
+            self.api_key = os.getenv("DERIBIT_DEMO_CLIENT_ID")
+            self.api_secret = os.getenv("DERIBIT_DEMO_CLIENT_SECRET")
+            self.flag = os.getenv("DERIBIT_DEMO_CLIENT_FLAG", "1")
             # Telegram credentials
             self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN_TEST')
-            self.telegram_chat_id_okx_straddle = os.getenv('TELEGRAM_CHAT_ID_DERIBIT_STRADDLE_TEST')
+            self.telegram_chat_id_deribit_straddle = os.getenv('TELEGRAM_CHAT_ID_DERIBIT_STRADDLE_TEST')
 
         self.tokens = configuration.LIST_OF_TOKENS
         
-        if not all([self.api_key, self.api_secret, self.passphrase]):
+        if not all([self.api_key, self.api_secret]):
             logger.error("Missing API credentials in environment variables")
             raise ValueError("Missing API credentials in environment variables")
         
@@ -55,10 +53,9 @@ class StrategyMonitor:
         api_credentials = {
             "api_key": self.api_key,
             "api_secret": self.api_secret,
-            "passphrase": self.passphrase,
             "flag": self.flag,
             "telegram_bot_token": self.telegram_bot_token,
-            "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
+            "telegram_chat_id": self.telegram_chat_id_deribit_straddle
         }
         
         strategies = []
@@ -95,10 +92,9 @@ class StrategyMonitor:
         api_credentials = {
             "api_key": self.api_key,
             "api_secret": self.api_secret,
-            "passphrase": self.passphrase,
             "flag": self.flag,
             "telegram_bot_token": self.telegram_bot_token,
-            "telegram_chat_id_okx_straddle": self.telegram_chat_id_okx_straddle
+            "telegram_chat_id": self.telegram_chat_id_deribit_straddle
         }
 
         strategies = []
@@ -116,7 +112,7 @@ class StrategyMonitor:
                     "allowed_strikes": config["allowed_strikes"],
                     "slippage_tolerance": config["slippage_tolerance"],
                     "bid_ask_threshold": config["bid_ask_threshold"],
-                    "okx_position_size_multiplier": config["okx_position_size_multiplier"],
+                    "deribit_position_size_multiplier": config["deribit_position_size_multiplier"],
                     "executed_orders_path": config["executed_orders_path"],
                     "price_time_flag": config["price_time_flag"],
                     "price_time": config["price_time"],

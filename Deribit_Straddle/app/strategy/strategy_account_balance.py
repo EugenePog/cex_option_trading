@@ -74,11 +74,10 @@ class StrategyAccountBalance(StrategyBase):
         self.config = config
         self.api_key = api_credentials["api_key"]
         self.api_secret = api_credentials["api_secret"]
-        self.passphrase = api_credentials["passphrase"]
         self.flag = api_credentials["flag"]
         self.notifier = TelegramNotifier(
             api_credentials["telegram_bot_token"],
-            api_credentials["telegram_chat_id_okx_straddle"]
+            api_credentials["telegram_chat_id"]
         )
         self.check_interval = config["check_interval"]
 
@@ -90,11 +89,11 @@ class StrategyAccountBalance(StrategyBase):
         loop = asyncio.get_event_loop()
 
         balance, positions, margin = await asyncio.gather(
-            loop.run_in_executor(None, check_balance,   self.api_key, self.api_secret, self.passphrase, self.flag),
-            loop.run_in_executor(None, check_positions, self.api_key, self.api_secret, self.passphrase, self.flag),
+            loop.run_in_executor(None, check_balance,   self.api_key, self.api_secret, self.flag),
+            loop.run_in_executor(None, check_positions, self.api_key, self.api_secret, self.flag),
             loop.run_in_executor(None, functools.partial(
                 check_margin_threshold,
-                self.api_key, self.api_secret, self.passphrase, self.flag,
+                self.api_key, self.api_secret, self.flag,
                 threshold_yellow=self.config["margin_threshold_yellow"],
                 threshold_red=self.config["margin_threshold_red"]
             )),
@@ -104,7 +103,7 @@ class StrategyAccountBalance(StrategyBase):
         iv_results = await asyncio.gather(*[
             loop.run_in_executor(
                 None, get_iv_by_inst_id_rest,
-                self.api_key, self.api_secret, self.passphrase, self.flag,
+                self.api_key, self.api_secret, self.flag,
                 pos.get("instId", "")
             )
             for pos in positions
@@ -121,7 +120,7 @@ class StrategyAccountBalance(StrategyBase):
         token_price_results = await asyncio.gather(*[
             loop.run_in_executor(
                 None, get_current_token_price_by_inst_id,
-                self.api_key, self.api_secret, self.passphrase, self.flag,
+                self.api_key, self.api_secret, self.flag,
                 token_key   # "BTC-USD" directly
             )
             for token_key in unique_token_keys

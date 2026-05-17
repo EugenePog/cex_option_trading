@@ -16,7 +16,7 @@ def load_settings(path: str) -> dict:
 
 
 GLOBAL_STRATEGIES  = {"margin_control_strategy", "account_balance_strategy", "option_expiry_monitor_strategy"}
-TOKEN_LEVEL_PARAM  = {"okx_position_size_multiplier"}  # non-strategy token-level params
+TOKEN_LEVEL_PARAM  = {"deribit_position_size_multiplier"}  # non-strategy token-level params
 
 
 class Configuration:
@@ -57,14 +57,14 @@ class Configuration:
 
         for strategy_name, strategy_cfg in value.items():
             if strategy_name in TOKEN_LEVEL_PARAM:
-                continue  # skip non-strategy keys like okx_position_size_multiplier
+                continue  # skip non-strategy keys like deribit_position_size_multiplier
             if not isinstance(strategy_cfg, dict):
                 continue
             if strategy_cfg.get("run_flag", 0) == 1:
                 # Merge token-level config into strategy config
                 token_strategies[strategy_name] = {
                     **strategy_cfg,
-                    "okx_position_size_multiplier": value.get("okx_position_size_multiplier", 1),
+                    "deribit_position_size_multiplier": value.get("deribit_position_size_multiplier", 1),
                     "executed_orders_path": EXECUTED_ORDERS_PATH,
                 }
 

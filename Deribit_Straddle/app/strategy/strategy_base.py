@@ -10,9 +10,8 @@ class StrategyBase(ABC):
         self.config = config
         self.api_key = api_credentials["api_key"]
         self.api_secret = api_credentials["api_secret"]
-        self.passphrase = api_credentials["passphrase"]
         self.flag = api_credentials["flag"]
-        self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id_okx_straddle"])
+        self.notifier = TelegramNotifier(api_credentials["telegram_bot_token"], api_credentials["telegram_chat_id"])
 
     @abstractmethod
     async def should_run(self) -> bool:
