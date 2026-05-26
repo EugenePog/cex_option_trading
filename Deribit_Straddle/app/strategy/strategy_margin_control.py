@@ -2,7 +2,7 @@ from app.strategy.strategy_base import StrategyBase
 import asyncio
 import functools
 from app import logger
-from Deribit_Straddle.app.cex_api.deribit_margin_functions import check_margin_threshold
+from app.cex_api.deribit_margin_functions import check_margin_threshold
 from app.telegram_bot import TelegramNotifier
 
 def format_margin_currencies(currencies: dict) -> str:

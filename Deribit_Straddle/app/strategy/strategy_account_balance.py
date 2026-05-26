@@ -2,10 +2,10 @@ from app.strategy.strategy_base import StrategyBase
 import asyncio
 from app import logger
 from app.telegram_bot import TelegramNotifier
-from Deribit_Straddle.app.cex_api.deribit_account_functions import check_balance, check_positions
-from Deribit_Straddle.app.cex_api.deribit_margin_functions import check_margin_threshold
+from app.cex_api.deribit_account_functions import check_balance, check_positions
+from app.cex_api.deribit_margin_functions import check_margin_threshold
 import functools
-from Deribit_Straddle.app.cex_api.deribit_market_functions import get_current_token_price_by_inst_id, get_iv_by_inst_id_rest
+from app.cex_api.deribit_market_functions import get_token_price, get_iv_by_inst_id_rest
 
 def format_balance(balance: dict) -> str:
     lines = ["💰 *Account Balance*"]
@@ -119,7 +119,7 @@ class StrategyAccountBalance(StrategyBase):
         # Fetch token price once per unique token key
         token_price_results = await asyncio.gather(*[
             loop.run_in_executor(
-                None, get_current_token_price_by_inst_id,
+                None, get_token_price,
                 self.api_key, self.api_secret, self.flag,
                 token_key   # "BTC-USD" directly
             )
@@ -130,7 +130,7 @@ class StrategyAccountBalance(StrategyBase):
         price_lookup = {}
         for token_key, result in zip(unique_token_keys, token_price_results):
             if not isinstance(result, Exception) and result:
-                price_lookup[token_key] = result["price"]
+                price_lookup[token_key] = result
 
         # Embed IV and token price into each position dict
         for pos, iv in zip(positions, iv_results):

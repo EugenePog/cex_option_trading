@@ -77,7 +77,7 @@ class StrategyStraddleShort(StrategyBase):
 
         call_to_open = call_size - summary["total_calls"]
         put_to_open = put_size - summary["total_puts"]
-        logger.info(f"Straddle short strategy for {self.token}. Calls: Plan - {call_size}, Openned - {summary["total_calls"]}, To_open - {call_to_open}")
+        logger.info(f"Straddle short strategy for {self.token}. Calls: Plan - {call_size}, Openned - {summary['total_calls']}, To_open - {call_to_open}")
         logger.info(f"Straddle short strategy for {self.token}. Puts: Plan - {put_size}, Openned - {summary['total_puts']}, To_open - {put_to_open}")
 
         # Define put call IDs for positions to be opened

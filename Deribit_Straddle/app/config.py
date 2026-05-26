@@ -15,7 +15,7 @@ def load_settings(path: str) -> dict:
         raise RuntimeError(f"Invalid JSON in settings file: {e}")
 
 
-GLOBAL_STRATEGIES  = {"margin_control_strategy", "account_balance_strategy", "option_expiry_monitor_strategy"}
+GLOBAL_STRATEGIES  = set() # temporay commented for development {"margin_control_strategy", "account_balance_strategy", "option_expiry_monitor_strategy"}
 TOKEN_LEVEL_PARAM  = {"deribit_position_size_multiplier"}  # non-strategy token-level params
 
 

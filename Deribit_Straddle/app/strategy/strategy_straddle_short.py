@@ -2,9 +2,9 @@ from app.functions import is_within_timeframe, is_allowed_day
 from app.strategy.strategy_base import StrategyBase
 import asyncio
 from app import logger
-from Deribit_Straddle.app.cex_api.deribit_functions import open_position, close_all_open_options, get_option_summary, get_available_near_money_options, get_token_price
+from app.cex_api.deribit_trade_functions import open_position, close_all_open_options, get_option_summary, get_available_near_money_options, get_token_price
 from app.functions import save_filled_orders_to_csv
-from Deribit_Straddle.app.cex_api.deribit_market_functions import get_current_token_price_by_inst_id, get_iv_by_inst_id_rest
+from app.cex_api.deribit_market_functions import get_iv_by_inst_id_rest
 
 def format_position_message(position: dict, token_price: float = None, call_iv: dict = None, put_iv: dict = None) -> str:
     state_emoji = {"filled": "✅", "cancelled": "❌", "mmp_canceled": "❌", "live": "⏳", "timeout": "⏳", "partially_filled": "🔄"}
@@ -64,7 +64,7 @@ class StrategyStraddleShort(StrategyBase):
         await self._close_all_open_orders()
 
         # Get position size from settings
-        call_size = int(self.config["amount"] * self.config["deribit_position_size_multiplier"])
+        call_size = self.config["amount"] * self.config["deribit_position_size_multiplier"]
         put_size = call_size
 
         summary = await loop.run_in_executor(
@@ -77,7 +77,7 @@ class StrategyStraddleShort(StrategyBase):
 
         call_to_open = call_size - summary["total_calls"]
         put_to_open = put_size - summary["total_puts"]
-        logger.info(f"Straddle short strategy for {self.token}. Calls: Plan - {call_size}, Openned - {summary["total_calls"]}, To_open - {call_to_open}")
+        logger.info(f"Straddle short strategy for {self.token}. Calls: Plan - {call_size}, Openned - {summary['total_calls']}, To_open - {call_to_open}")
         logger.info(f"Straddle short strategy for {self.token}. Puts: Plan - {put_size}, Openned - {summary['total_puts']}, To_open - {put_to_open}")
 
         # Define put call IDs for positions to be opened
@@ -116,14 +116,14 @@ class StrategyStraddleShort(StrategyBase):
                     token_price = await loop.run_in_executor(
                         None, get_token_price,
                         self.api_key, self.api_secret, self.flag,
-                        closest_call["instId"],   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
+                        closest_call["instId"],   # e.g. "BTC-31JAN26-70500-C" → extracts "BTC-USD" internally
                         self.config["price_time"]
                     )
                 else:
                     token_price = await loop.run_in_executor(
                         None, get_token_price,
                         self.api_key, self.api_secret, self.flag,
-                        closest_call["instId"]   # e.g. "BTC-USD-260319-70500-C" → extracts "BTC-USD" internally
+                        closest_call["instId"]   # e.g. "BTC-31JAN26-70500-C" → extracts "BTC-USD" internally
                     )
 
                 call_iv = await loop.run_in_executor(
