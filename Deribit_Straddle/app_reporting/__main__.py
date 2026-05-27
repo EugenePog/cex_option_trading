@@ -11,9 +11,9 @@ from types import FrameType
 
 from . import config, notifier
 from .csv_store import save as save_straddles
+from .deribit_client import fetch_trades, parse_trades
 from .gdrive import upload_csv_as_gsheet
 from .gsheets import add_pnl_waterfall_chart
-from .okx_client import fetch_trades, parse_trades
 from .straddles import combine_straddle_trades
 
 # --- Logging --------------------------------------------------------------
@@ -44,7 +44,7 @@ signal.signal(signal.SIGINT, _stop)
 # --- Notification message -------------------------------------------------
 def _build_summary_message(sheet_url: str) -> str:
     return (
-        "✅ *OKX Straddles Report Updated*\n\n"
+        "✅ *Deribit Straddles Report Updated*\n\n"
         f"[Open Sheet]({sheet_url})"
     )
 
@@ -52,9 +52,8 @@ def _build_summary_message(sheet_url: str) -> str:
 def run_once() -> None:
     log.info("=== Reporting cycle start ===")
 
-    raw       = fetch_trades(config.OKX_API_KEY, config.OKX_API_SECRET,
-                             config.OKX_PASSPHRASE, config.OKX_FLAG,
-                             inst_type="OPTION")
+    raw       = fetch_trades(config.API_KEY, config.API_SECRET,
+                             config.FLAG, config.CURRENCIES)
     trades    = parse_trades(raw)
     straddles = combine_straddle_trades(trades)
 
@@ -73,7 +72,7 @@ def run_once() -> None:
 
 
 def main() -> None:
-    config.assert_okx_creds()
+    config.assert_deribit_creds()
 
     if "--once" in sys.argv:
         run_once()

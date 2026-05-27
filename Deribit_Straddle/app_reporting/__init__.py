@@ -1,4 +1,4 @@
-"""OKX straddle reporting service.
+"""deribit straddle reporting service.
 
 Run as:
     python -m app_reporting              # long-running loop

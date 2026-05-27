@@ -13,13 +13,19 @@ LOG_DIR      = DATA_DIR / "logs"
 
 CREDENTIALS_PATH = PROJECT_ROOT / "credentials.json"
 TOKEN_PATH       = PROJECT_ROOT / "token.json"
-STRADDLES_CSV    = DATA_DIR / "straddles_history.csv"
+STRADDLES_CSV    = DATA_DIR / "straddles_history_demo_acc.csv"
 
-# --- OKX ---
-OKX_API_KEY    = os.getenv("OKX_K_API_KEY")
-OKX_API_SECRET = os.getenv("OKX_K_API_SECRET")
-OKX_PASSPHRASE = os.getenv("OKX_K_PASSPHRASE")
-OKX_FLAG       = os.getenv("OKX_K_FLAG", "0")
+# --- Deribit ---
+API_KEY    = os.getenv("DERIBIT_DEMO_CLIENT_ID")
+API_SECRET = os.getenv("DERIBIT_DEMO_CLIENT_SECRET")
+FLAG       = os.getenv("DERIBIT_DEMO_CLIENT_FLAG", "1")
+
+# Currencies to pull option transaction logs for (comma-separated in env).
+CURRENCIES: list[str] = [
+    c.strip().upper()
+    for c in os.getenv("DERIBIT_CURRENCIES", "BTC,ETH").split(",")
+    if c.strip()
+]
 
 # --- Google ---
 GOOGLE_SCOPES = [
@@ -27,23 +33,22 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
 ]
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
-GSHEET_NAME      = os.getenv("GSHEET_NAME", "Deribit_straddles_history")
+GSHEET_NAME      = os.getenv("GSHEET_NAME", "Deribit_straddles_history_demo_acc")
 
 # --- Telegram ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID_DERIBIT_STRADDLE")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_TEST")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID_DERIBIT_STRADDLE_TEST")
 
 # --- Scheduler ---
 # How often the long-running loop refreshes the report, in seconds.
 REPORT_INTERVAL_SEC = int(os.getenv("REPORT_INTERVAL_SEC", "3600"))
 
 
-def assert_okx_creds() -> None:
+def assert_deribit_creds() -> None:
     """Fail fast at startup if any required env var is missing."""
     missing = [name for name, val in {
-        "OKX_K_API_KEY":    OKX_API_KEY,
-        "OKX_K_API_SECRET": OKX_API_SECRET,
-        "OKX_K_PASSPHRASE": OKX_PASSPHRASE,
+        "API_KEY":    API_KEY,
+        "API_SECRET": API_SECRET,
     }.items() if not val]
     if missing:
         raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")

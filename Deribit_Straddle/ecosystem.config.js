@@ -41,15 +41,15 @@ module.exports = {
     //     --cwd /root/cex_option_trading/Deribit_Straddle -- -m app --env prod
     // -------------------------------------------------------------------
     {
-      name: "deribit-straddle-prod",  // prod
-      //name: "deribit-straddle-test",  // test
-      script: "/root/cex_option_trading/Deribit_Straddle/.venv/bin/python3", //prod
-      //script: "/Users/eugene/Documents/projects/cex_option_trading/Deribit_Straddle/.venv/bin/python3",  // test
-      args: "-m app --env prod",  // prod
-      //args: "-m app --env test",  // test
+      //name: "deribit-straddle-prod",  // prod
+      name: "deribit-straddle-test",  // test
+      //script: "/root/cex_option_trading/Deribit_Straddle/.venv/bin/python3", //prod
+      script: "/Users/eugene/Documents/projects/cex_option_trading/Deribit_Straddle/.venv/bin/python3",  // test
+      //args: "-m app --env prod",  // prod
+      args: "-m app --env test",  // test
       interpreter: "none",
-      cwd: "/root/cex_option_trading/Deribit_Straddle",  // prod
-      //cwd: "/Users/eugene/Documents/projects/cex_option_trading/Deribit_Straddle", // test
+      //cwd: "/root/cex_option_trading/Deribit_Straddle",  // prod
+      cwd: "/Users/eugene/Documents/projects/cex_option_trading/Deribit_Straddle", // test
       autorestart: true,
       max_restarts: 10,
       restart_delay: 10000,

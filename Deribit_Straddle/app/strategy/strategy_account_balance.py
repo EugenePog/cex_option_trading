@@ -109,9 +109,9 @@ class StrategyAccountBalance(StrategyBase):
             for pos in positions
         ], return_exceptions=True)
 
-        # Get unique token keys from positions: "BTC-USD-260319-70500-C" → "BTC-USD"
+        # Get unique token keys from positions: "BTC-31JAN26-70500-C" → "BTC"
         unique_token_keys = list({
-            "-".join(pos.get("instId", "").split("-")[:2])
+            pos.get("instId", "").split("-")[0]
             for pos in positions
             if pos.get("instId")
         })
@@ -136,7 +136,7 @@ class StrategyAccountBalance(StrategyBase):
         for pos, iv in zip(positions, iv_results):
             pos["iv"] = None if isinstance(iv, Exception) or iv is None else iv
 
-            token_key          = "-".join(pos.get("instId", "").split("-")[:2])
+            token_key = pos.get("instId", "").split("-")[0]
             pos["token_price"] = price_lookup.get(token_key)
 
         message = (
