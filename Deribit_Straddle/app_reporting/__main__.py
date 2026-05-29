@@ -54,6 +54,7 @@ def run_once() -> None:
 
     raw       = fetch_trades(config.API_KEY, config.API_SECRET,
                              config.FLAG, config.CURRENCIES)
+    log.info(f"raw data: {raw}")
     trades    = parse_trades(raw)
     straddles = combine_straddle_trades(trades)
 

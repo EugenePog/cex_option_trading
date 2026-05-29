@@ -1,3 +1,4 @@
+import time
 import requests
 from datetime import datetime, timezone
 from app import logger
@@ -8,6 +9,10 @@ DERIBIT_BASE_URLS = {
     "1": "https://test.deribit.com/api/v2",
     "0": "https://www.deribit.com/api/v2",
 }
+
+# Default HTTP timeout. Testnet sometimes takes >10s under load — 30 keeps
+# headroom without being so high it masks a truly dead endpoint.
+_DEFAULT_TIMEOUT = 30
 
 # Process-wide cache: (api_key, flag) -> (access_token, unix_expiry_ts).
 # Tokens are valid for ~15 min; we refresh 60 s before expiry.
@@ -83,17 +88,43 @@ def _deribit_get(api_key: str, api_secret: str, flag: str,
     return data["result"]
 
 
-def _get_index_price(base_url: str, currency: str) -> float:
-    """USD spot price for a currency. Stablecoins return 1.0."""
+def _get_index_price(base_url: str, currency: str, retries: int = 2) -> float:
+    """
+    USD spot price for a currency. Stablecoins return 1.0.
+ 
+    Retries on transient network errors (timeouts, connection drops) since
+    testnet `/public/get_index_price` is occasionally slow. Returns 0.0 if
+    all retries fail — callers that only need margin_ratio (computed in
+    native currency) are unaffected by a missing USD price.
+    """
     if currency.upper() in ("USDC", "USDT", "USD", "EURR"):
         return 1.0
-    response = requests.get(
-        f"{base_url}/public/get_index_price",
-        params={"index_name": f"{currency.lower()}_usd"},
-        timeout=10,
+ 
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            response = requests.get(
+                f"{base_url}/public/get_index_price",
+                params={"index_name": f"{currency.lower()}_usd"},
+                timeout=_DEFAULT_TIMEOUT,
+            )
+            response.raise_for_status()
+            return float(response.json().get("result", {}).get("index_price", 0) or 0)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_err = e
+            if attempt < retries:
+                wait = 2 ** attempt  # 1s, 2s
+                logger.warning(
+                    f"Index price for {currency} failed ({type(e).__name__}), "
+                    f"retry {attempt + 1}/{retries} in {wait}s"
+                )
+                time.sleep(wait)
+ 
+    logger.error(
+        f"Index price for {currency} failed after {retries + 1} attempts: {last_err}. "
+        f"USD valuations for this currency will be 0.0 this cycle."
     )
-    response.raise_for_status()
-    return float(response.json().get("result", {}).get("index_price", 0) or 0)
+    return 0.0
 
 
 def check_balance(api_key: str, api_secret: str, flag: str) -> dict:

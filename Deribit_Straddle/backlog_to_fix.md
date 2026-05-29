@@ -34,3 +34,13 @@ Endpoint choices worth knowing
 Historical price (get_token_price with price_time): Deribit doesn't have a clean per-minute historical index endpoint, so app use /public/get_tradingview_chart_data on BTC-PERPETUAL with 1-minute resolution. Perpetual tracks spot tightly via funding, so it's a fine proxy for "BTC price at 8:00 UTC." If app ever need true index history, the /public/get_volatility_index_data endpoint exists for vol indices but not spot indices at minute granularity.
 Tick size: Deribit has a singular /public/get_instrument that returns one instrument's details directly — much simpler than OKX where app had to fetch the whole chain and filter locally.
 Open positions: /private/get_positions requires a currency parameter, so app pass token straight through. One call per token instead of fetching all options and filtering by instId.startswith.
+
+_DEFAULT_TIMEOUT = 30 and retry loop
+
+Same fix as for _get_index_price() should be applied to deribit_market_functions.py and deribit_functions.py — both have timeout=10 on various requests.get(...) calls (ticker, get_instrument, get_index_price, tradingview chart). I'd do the same _DEFAULT_TIMEOUT constant pattern in each file, or import it from deribit_account_functions. Lowest priority of the three since:
+
+deribit_account_functions is hit by every strategy iteration via _deribit_get and _get_index_price → highest impact
+deribit_market_functions hits ticker/index price → moderate impact
+deribit_functions hits same endpoints during order placement → moderate, but order placement already has a partial-fill retry at the strategy level
+
+BTC-27MAY26-76500 has two separate sell entries per leg (positions were added in two tranches at different timestamps). The current combine_straddle_trades picks only the first call and first put via next(), silently dropping the second tranche. That's pre-existing behaviour from the OKX version and a separate concern, but worth flagging.

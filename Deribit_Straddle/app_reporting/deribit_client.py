@@ -177,7 +177,7 @@ def fetch_trades(api_key: str, api_secret: str, flag: str,
 
 def parse_trades(raw_trades: list[dict]) -> list[dict]:
     """Normalize raw Deribit transaction-log entries to the trade dict used downstream.
-
+ 
     Output keys (identical to what okx_client produced):
         time, instId, type, action, fill_sz, fill_px, fill_px_usd,
         pnl, fee, bal_chg, ord_id
@@ -188,18 +188,23 @@ def parse_trades(raw_trades: list[dict]) -> list[dict]:
         side       = t.get("side", "")   # "buy" | "sell" (only for trades)
         change     = float(t.get("change", 0) or 0)
         is_trade   = (trade_type == "trade")
-
+ 
         # Map to the same action vocabulary OKX used:
-        #   trade  + sell/buy    → "sell" / "buy"
+        #   trade  + "open sell" / "close sell" → "sell"
+        #   trade  + "open buy"  / "close buy"  → "buy"
         #   delivery + change≥0  → "expired_profit"  (OTM expiry — no cash out)
         #   delivery + change<0  → "expired_loss"     (ITM expiry — cash paid out)
+        #
+        # Deribit encodes direction as "open sell" / "close buy" etc., so we
+        # extract the direction word rather than doing an exact match.
         if is_trade:
-            action = side  # "buy" or "sell"
+            side_lower = (side or "").lower()
+            action = "sell" if "sell" in side_lower else "buy"
         elif trade_type == "delivery":
             action = "expired_profit" if change >= 0 else "expired_loss"
         else:
             action = trade_type  # passthrough for unexpected types
-
+ 
         out.append({
             "time":        _fmt_time(t.get("timestamp")),
             "instId":      t.get("instrument_name") or "",
@@ -213,5 +218,5 @@ def parse_trades(raw_trades: list[dict]) -> list[dict]:
             "bal_chg":     change,
             "ord_id":      t.get("trade_id") or t.get("order_id") or "",
         })
-
+ 
     return out
