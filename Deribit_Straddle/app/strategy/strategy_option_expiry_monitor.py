@@ -31,13 +31,19 @@ from datetime import datetime, timezone
 from app import logger
 from app.strategy.strategy_base import StrategyBase
 from app.telegram_bot import TelegramNotifier
-from app.cex_api.deribit_account_functions import _deribit_get
+from app.cex_api.deribit_account_functions import (
+    _deribit_get,
+    DERIBIT_BASE_URLS,
+)
 
 
-DERIBIT_WS_URLS = {
-    "1": "wss://test.deribit.com/ws/api/v2",
-    "0": "wss://www.deribit.com/ws/api/v2",
-}
+def _ws_url(flag: str) -> str:
+    """Derive the Deribit WS URL from the single source-of-truth REST URL.
+
+    https://test.deribit.com/api/v2  →  wss://test.deribit.com/ws/api/v2
+    """
+    base = DERIBIT_BASE_URLS.get(flag, DERIBIT_BASE_URLS["1"])
+    return base.replace("https://", "wss://").replace("/api/v2", "/ws/api/v2")
 
 
 class StrategyOptionExpiryMonitor(StrategyBase):
@@ -82,7 +88,7 @@ class StrategyOptionExpiryMonitor(StrategyBase):
     # WebSocket listener
     # ----------------------------------------------------------------
     async def _listen(self):
-        url = DERIBIT_WS_URLS.get(self.flag, DERIBIT_WS_URLS["1"])
+        url = _ws_url(self.flag)
 
         while True:
             try:
@@ -95,6 +101,7 @@ class StrategyOptionExpiryMonitor(StrategyBase):
                     await self._auth(ws)
                     await self._set_heartbeat(ws, interval=30)
                     await self._subscribe(ws)
+                    await self._seed_known_positions()
 
                     refresh_task = asyncio.create_task(self._refresh_token_loop(ws))
                     try:
@@ -155,6 +162,154 @@ class StrategyOptionExpiryMonitor(StrategyBase):
             "method":  "private/subscribe",
             "params":  {"channels": ["user.changes.option.any.raw"]},
         }))
+
+    async def _seed_known_positions(self):
+        """
+        Snapshot current option positions via REST and populate known_positions.
+
+        Why this matters: Deribit's user.changes channel only emits on actual
+        changes, not initial state. If a position existed before the WS
+        subscription was established, the first event we'd receive for it
+        could be the settlement (size=0). Without a prev_size to compare
+        against, _handle_position silently drops the close event.
+
+        Also detects reconnect drift: positions that were in our in-memory
+        view before the reconnect but are missing from the fresh REST
+        snapshot closed while we were disconnected. For each, we synthesize
+        the close-event handling path so expiry alerts aren't lost across
+        a network blip during a settlement window.
+
+        Called after subscribe (not before) so any change events that fire
+        during the snapshot don't get lost in a gap. Overwrites are idempotent.
+        """
+        loop = asyncio.get_event_loop()
+
+        # Capture in-memory state before we overwrite it with the fresh snapshot
+        old_known = dict(self.known_positions)
+
+        def fetch_currencies():
+            summaries = _deribit_get(
+                self.api_key, self.api_secret, self.flag,
+                "/private/get_account_summaries",
+            )
+            return [s["currency"] for s in summaries.get("summaries", [])]
+
+        def fetch_positions(currency):
+            return _deribit_get(
+                self.api_key, self.api_secret, self.flag,
+                "/private/get_positions",
+                {"currency": currency, "kind": "option"},
+            )
+
+        try:
+            currencies = await loop.run_in_executor(None, fetch_currencies)
+            new_known: dict = {}
+            for currency in currencies:
+                positions = await loop.run_in_executor(None, fetch_positions, currency)
+                for pos in positions:
+                    size = float(pos.get("size", 0) or 0)
+                    if size != 0:
+                        inst_id = pos.get("instrument_name", "")
+                        new_known[inst_id] = size
+
+            # Replace (don't merge) so the diff against old_known is accurate
+            self.known_positions = new_known
+
+            logger.info(
+                f"[ExpiryMonitor] Seeded {len(new_known)} existing option position(s) "
+                f"into known_positions across {len(currencies)} currency(ies)"
+            )
+
+            # Reconnect-drift recovery: anything we knew about but REST no
+            # longer reports must have closed while we weren't listening.
+            closed_while_disconnected = set(old_known) - set(new_known)
+            if closed_while_disconnected:
+                logger.warning(
+                    f"[ExpiryMonitor] {len(closed_while_disconnected)} position(s) "
+                    f"closed while disconnected: {sorted(closed_while_disconnected)}"
+                )
+                for inst_id in closed_while_disconnected:
+                    await self._handle_disconnected_close(inst_id, old_known[inst_id])
+        except Exception as e:
+            logger.error(f"[ExpiryMonitor] Failed to seed positions: {e}", exc_info=True)
+
+    async def _handle_disconnected_close(self, inst_id: str, prev_size: float):
+        """
+        Run the close-event handling path for a position that closed while
+        we were disconnected from the WS.
+
+        Pulls realized PnL + delivery price from /private/get_settlement_history_by_instrument,
+        then mirrors the same logging / session_pnl accumulation / expiry-summary
+        check that _handle_position would have done if the live event had been
+        delivered. Settlement timestamp from Deribit is used (not current time)
+        so the expiry summary shows when the close actually happened.
+
+        If no settlement record exists for the instrument, the position was
+        most likely manually closed (not expired). Logged and skipped —
+        synthesizing a "close" for a manual close would require walking
+        trade history, which is out of scope for this monitor.
+        """
+        loop = asyncio.get_event_loop()
+
+        def fetch_settlement():
+            try:
+                result = _deribit_get(
+                    self.api_key, self.api_secret, self.flag,
+                    "/private/get_settlement_history_by_instrument",
+                    {"instrument_name": inst_id, "count": 10},
+                )
+                return result.get("settlements", [])
+            except ValueError as e:
+                logger.warning(f"[ExpiryMonitor] Failed to fetch settlement for {inst_id}: {e}")
+                return []
+
+        settlements = await loop.run_in_executor(None, fetch_settlement)
+
+        # Settlements come newest-first; pick the most recent delivery/settlement
+        settlement = next(
+            (s for s in settlements if s.get("type") in ("settlement", "delivery")),
+            None,
+        )
+
+        if not settlement:
+            logger.warning(
+                f"[ExpiryMonitor] No settlement record for {inst_id} "
+                f"(prev_size={prev_size}) — likely manually closed during disconnect, skipping"
+            )
+            return
+
+        pnl         = float(settlement.get("profit_loss", 0) or 0)
+        delivery_px = float(settlement.get("index_price", 0) or 0)
+        ts_ms       = int(settlement.get("timestamp", 0) or 0)
+
+        time_str = (
+            datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+            if ts_ms
+            else datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        )
+        px_str  = f"${delivery_px:,.2f}" if delivery_px else "n/a"
+        pnl_str = f"{pnl:.8f}"
+
+        logger.info(
+            f"[ExpiryMonitor] 🔔 CLOSED (reconnect-recovered): {inst_id} | "
+            f"px: {px_str} | PnL: {pnl_str} | time: {time_str}"
+        )
+
+        self.session_pnl["total_pnl"]    += pnl
+        self.session_pnl["closed_count"] += 1
+        self.session_pnl["closed_legs"].append({
+            "instId":      inst_id,
+            "pnl":         pnl,
+            "delivery_px": delivery_px,
+            "time":        time_str,
+        })
+
+        logger.info(
+            f"[ExpiryMonitor] 📊 Session: {self.session_pnl['closed_count']} closed | "
+            f"running PnL: {self.session_pnl['total_pnl']:.8f}"
+        )
+
+        await self._check_and_notify_expiry_summary()
 
     async def _refresh_token_loop(self, ws):
         """Re-auth every 13 minutes (default token lifetime is 15 min)."""
