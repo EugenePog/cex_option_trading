@@ -14,6 +14,18 @@ DERIBIT_BASE_URLS = {
 # headroom without being so high it masks a truly dead endpoint.
 _DEFAULT_TIMEOUT = 30
 
+# Shared HTTP session — reuses underlying TCP+TLS connections instead of
+# opening a fresh one per call. This is the single biggest reliability win:
+# "Connection reset by peer" during TLS handshake happens most often when
+# the server is rate-limiting or load-balancing new connections.
+_session = requests.Session()
+
+# Currencies the account may hold but Deribit doesn't publish a {ccy}_usd
+# spot index for (tokenized funds, exotic stables, etc.). Populated lazily
+# by _get_index_price after the first failed lookup — second call onwards
+# returns 0.0 instantly instead of burning retries forever.
+_unsupported_index_currencies: set = set()
+
 # Process-wide cache: (api_key, flag) -> (access_token, unix_expiry_ts).
 # Tokens are valid for ~15 min; we refresh 60 s before expiry.
 _token_cache: dict = {}
@@ -29,14 +41,14 @@ def _get_access_token(api_key: str, api_secret: str, flag: str) -> tuple[str, st
     if cached and cached[1] > now + 60:
         return cached[0], base_url
 
-    response = requests.get(
+    response = _session.get(
         f"{base_url}/public/auth",
         params={
             "grant_type":    "client_credentials",
             "client_id":     api_key,
             "client_secret": api_secret,
         },
-        timeout=10,
+        timeout=_DEFAULT_TIMEOUT,
     )
     response.raise_for_status()
     data = response.json()
@@ -50,66 +62,117 @@ def _get_access_token(api_key: str, api_secret: str, flag: str) -> tuple[str, st
 
 
 def _deribit_get(api_key: str, api_secret: str, flag: str,
-                 endpoint: str, params: dict = None) -> dict | list:
+                 endpoint: str, params: dict = None,
+                 retries: int = 2) -> dict | list:
     """Authenticated GET → returns the 'result' field or raises.
- 
+
     Deribit returns JSON-RPC error objects in the BODY even on 4xx HTTP
     responses, e.g. {"error": {"code": 11044, "message": "instrument_locked",
     "data": {...}}}. We parse the body first so the caller sees the actual
     reason ("instrument_locked", "max_show_amount_reached", etc.) instead
     of just "400 Bad Request".
+
+    retries: number of additional attempts on TRANSIENT network errors only
+        (Timeout, ConnectionError — typically "connection reset by peer"
+        during TLS handshake on flaky testnet). API-level errors in the
+        response body are NOT retried — they're permanent.
+
+        IMPORTANT: order-placement calls (/private/sell, /private/buy)
+        MUST pass retries=0. A connection error mid-request could mean
+        "didn't reach Deribit" OR "reached Deribit and we lost the
+        response" — retrying could double-place the order.
     """
     token, base_url = _get_access_token(api_key, api_secret, flag)
-    response = requests.get(
-        f"{base_url}{endpoint}",
-        headers={"Authorization": f"Bearer {token}"},
-        params=params or {},
-        timeout=10,
-    )
- 
-    try:
-        data = response.json()
-    except ValueError:
-        # Non-JSON response — fall back to HTTP status
+
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            response = _session.get(
+                f"{base_url}{endpoint}",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params or {},
+                timeout=_DEFAULT_TIMEOUT,
+            )
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_err = e
+            if attempt < retries:
+                wait = 2 ** attempt  # 1s, 2s
+                logger.warning(
+                    f"Deribit {endpoint} network error ({type(e).__name__}), "
+                    f"retry {attempt + 1}/{retries} in {wait}s"
+                )
+                time.sleep(wait)
+                continue
+            raise ValueError(
+                f"Deribit {endpoint} failed after {retries + 1} attempts: {last_err}"
+            )
+
+        try:
+            data = response.json()
+        except ValueError:
+            # Non-JSON response — fall back to HTTP status
+            response.raise_for_status()
+            raise ValueError(f"Deribit returned non-JSON on {endpoint}: {response.text[:200]}")
+
+        if "error" in data:
+            err = data["error"]
+            if isinstance(err, dict):
+                code    = err.get("code")
+                message = err.get("message", "")
+                details = err.get("data", "")
+                raise ValueError(f"Deribit error on {endpoint} [code={code}]: {message} {details}".strip())
+            raise ValueError(f"Deribit error on {endpoint}: {err}")
+
+        # Safety net — non-200 with no "error" field shouldn't happen, but cover it
         response.raise_for_status()
-        raise ValueError(f"Deribit returned non-JSON on {endpoint}: {response.text[:200]}")
- 
-    if "error" in data:
-        err = data["error"]
-        if isinstance(err, dict):
-            code    = err.get("code")
-            message = err.get("message", "")
-            details = err.get("data", "")
-            raise ValueError(f"Deribit error on {endpoint} [code={code}]: {message} {details}".strip())
-        raise ValueError(f"Deribit error on {endpoint}: {err}")
- 
-    # Safety net — non-200 with no "error" field shouldn't happen, but cover it
-    response.raise_for_status()
-    return data["result"]
+        return data["result"]
 
 
 def _get_index_price(base_url: str, currency: str, retries: int = 2) -> float:
     """
     USD spot price for a currency. Stablecoins return 1.0.
- 
-    Retries on transient network errors (timeouts, connection drops) since
-    testnet `/public/get_index_price` is occasionally slow. Returns 0.0 if
-    all retries fail — callers that only need margin_ratio (computed in
-    native currency) are unaffected by a missing USD price.
+
+    Retries on transient network errors. Returns 0.0 if all retries fail
+    or if the currency has no Deribit index price endpoint (tokenized funds,
+    exotic stables, etc.) — callers that only need margin_ratio (computed
+    in native currency) are unaffected by a missing USD price.
+
+    Caches "no such index" responses in _unsupported_index_currencies so
+    we don't burn retries on the same dead currency every cycle.
     """
-    if currency.upper() in ("USDC", "USDT", "USD", "EURR"):
+    upper = currency.upper()
+    if upper in ("USDC", "USDT", "USD", "EURR"):
         return 1.0
- 
+    if upper in _unsupported_index_currencies:
+        return 0.0
+
     last_err = None
     for attempt in range(retries + 1):
         try:
-            response = requests.get(
+            response = _session.get(
                 f"{base_url}/public/get_index_price",
                 params={"index_name": f"{currency.lower()}_usd"},
                 timeout=_DEFAULT_TIMEOUT,
             )
-            response.raise_for_status()
-            return float(response.json().get("result", {}).get("index_price", 0) or 0)
+
+            try:
+                payload = response.json()
+            except ValueError:
+                response.raise_for_status()
+                continue
+
+            # Permanent failure (no such index) — cache and stop trying.
+            # Don't waste retries on something that'll never work.
+            if "error" in payload:
+                _unsupported_index_currencies.add(upper)
+                logger.info(
+                    f"Currency {currency} has no Deribit index price "
+                    f"({payload['error']}) — cached as unsupported"
+                )
+                return 0.0
+
+            return float(payload.get("result", {}).get("index_price", 0) or 0)
+
         except (requests.Timeout, requests.ConnectionError) as e:
             last_err = e
             if attempt < retries:
@@ -119,7 +182,7 @@ def _get_index_price(base_url: str, currency: str, retries: int = 2) -> float:
                     f"retry {attempt + 1}/{retries} in {wait}s"
                 )
                 time.sleep(wait)
- 
+
     logger.error(
         f"Index price for {currency} failed after {retries + 1} attempts: {last_err}. "
         f"USD valuations for this currency will be 0.0 this cycle."

@@ -13,7 +13,7 @@ import requests
 from datetime import datetime, timezone
 from app import logger
  
-from app.cex_api.deribit_account_functions import DERIBIT_BASE_URLS
+from app.cex_api.deribit_account_functions import DERIBIT_BASE_URLS, _session, _DEFAULT_TIMEOUT
 
 # ====================================================================
 # Internal helpers
@@ -57,10 +57,10 @@ def get_token_price(
     if price_time is None:
         # --- Current index price ---
         import requests
-        response = requests.get(
+        response = _session.get(
             f"{base_url}/public/get_index_price",
             params={"index_name": _index_name(token)},
-            timeout=10,
+            timeout=_DEFAULT_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -78,7 +78,7 @@ def get_token_price(
     target_ts_ms = int(target_time.timestamp() * 1000)
 
     import requests
-    response = requests.get(
+    response = _session.get(
         f"{base_url}/public/get_tradingview_chart_data",
         params={
             "instrument_name":  f"{token}-PERPETUAL",
@@ -86,7 +86,7 @@ def get_token_price(
             "end_timestamp":    target_ts_ms + 60_000,  # 1-minute window
             "resolution":       "1",
         },
-        timeout=10,
+        timeout=_DEFAULT_TIMEOUT,
     )
     response.raise_for_status()
     data = response.json()
@@ -125,10 +125,10 @@ def get_iv_by_inst_id_rest(
     base_url = DERIBIT_BASE_URLS.get(flag, DERIBIT_BASE_URLS["1"])
  
     try:
-        response = requests.get(
+        response = _session.get(
             f"{base_url}/public/ticker",
             params={"instrument_name": inst_id},
-            timeout=10,
+            timeout=_DEFAULT_TIMEOUT,
         )
         response.raise_for_status()
         payload = response.json()

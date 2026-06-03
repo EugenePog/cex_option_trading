@@ -22,7 +22,7 @@ from datetime import datetime, timezone, timedelta
 import math
 import time
 
-from app.cex_api.deribit_account_functions import _deribit_get, DERIBIT_BASE_URLS
+from app.cex_api.deribit_account_functions import _deribit_get, DERIBIT_BASE_URLS, _DEFAULT_TIMEOUT
 from app.cex_api.deribit_market_functions import get_token_price
 
 
@@ -277,7 +277,7 @@ def get_option_mark_price(
     response = requests.get(
         f"{base_url}/public/ticker",
         params={"instrument_name": instId},
-        timeout=10,
+        timeout=_DEFAULT_TIMEOUT,
     )
     response.raise_for_status()
     payload = response.json()
@@ -341,7 +341,7 @@ def get_tick_size(api_key: str, api_secret: str, flag: str, instId: str) -> floa
     response = requests.get(
         f"{base_url}/public/get_instrument",
         params={"instrument_name": instId},
-        timeout=10,
+        timeout=_DEFAULT_TIMEOUT,
     )
     response.raise_for_status()
     payload = response.json()
@@ -414,6 +414,7 @@ def _place_leg(
             "type":            "limit",
             "price":           limit_px,
         },
+        retries=0,   # Never retry order placement > 0.
     )
 
 
