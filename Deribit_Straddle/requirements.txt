@@ -2,7 +2,6 @@ python-dotenv
 web3
 pydantic
 asyncio
-python-okx
 python-telegram-bot
 google-api-python-client 
 google-auth-httplib2 
