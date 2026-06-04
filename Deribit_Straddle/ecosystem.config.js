@@ -67,7 +67,7 @@ const baseConfig = {
 const makeStrategyApp = (env) => ({
   ...baseConfig,
   name:          `deribit-straddle-${env}`,
-  args:          `-m app --env ${env}`,
+  args:          `-m app --env test`, // hardcoded --env test run, when prod account is ready, use: `-m app --env ${env}`,
   cwd:           ROOT_BY_ENV[env],
   autorestart:   true,
   max_restarts:  10,
