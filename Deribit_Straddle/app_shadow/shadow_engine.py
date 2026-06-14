@@ -149,6 +149,15 @@ class PositionStore:
 # CSV writer
 # ====================================================================
 
+def _fmt(v):
+    """Clean numeric formatting for CSV — fixed-point, no scientific notation,
+    no float noise (e.g. 0.00003 instead of 2.9999999999999997e-05)."""
+    if isinstance(v, float):
+        s = f"{v:.10f}".rstrip("0").rstrip(".")
+        return s if s not in ("", "-0") else "0"
+    return v
+
+
 def _append_csv(row: dict, path: str):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     exists = os.path.exists(path)
@@ -156,7 +165,42 @@ def _append_csv(row: dict, path: str):
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         if not exists:
             writer.writeheader()
-        writer.writerow({k: row.get(k, "") for k in CSV_FIELDS})
+        writer.writerow({k: _fmt(row.get(k, "")) for k in CSV_FIELDS})
+
+
+def _upsert_csv(row: dict, path: str, key_field: str = "position_id"):
+    """Update the existing row whose key_field matches `row` (rewriting it in
+    place with the new values), or append it if no match exists.
+
+    Used at settlement so the original OPEN row for a position is REWRITTEN with
+    its SETTLE data — one row per position_id over its whole lifecycle, rather
+    than a separate OPEN row plus a SETTLE row."""
+    key = row.get(key_field)
+    new_row = {k: _fmt(row.get(k, "")) for k in CSV_FIELDS}
+
+    existing = []
+    if os.path.exists(path):
+        with open(path, newline="") as f:
+            existing = list(csv.DictReader(f))
+
+    found = False
+    out_rows = []
+    for r in existing:
+        if r.get(key_field) == key:
+            out_rows.append(new_row)
+            found = True
+        else:
+            out_rows.append({k: r.get(k, "") for k in CSV_FIELDS})
+    if not found:
+        out_rows.append(new_row)
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(out_rows)
+    os.replace(tmp, path)
 
 
 # ====================================================================
@@ -432,7 +476,9 @@ class ShadowBroker:
             f"realized={realized:.8f} {pos['token']}"
         )
 
-        _append_csv({
+        # Rewrite the position's original OPEN row in place with its SETTLE data
+        # (matched by position_id). One row per position over its lifecycle.
+        _upsert_csv({
             "strategy": "ShadowStraddleShort",
             "event": "SETTLE",
             "time": settle_time,
