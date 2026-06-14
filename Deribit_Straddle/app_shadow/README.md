@@ -79,6 +79,26 @@ Aggregate `realized_pnl_coin` over `SETTLE` rows for your shadow PnL.
 
 State lives in `data/shadow_positions.json` (survives restarts).
 
+## Output: `data/straddles_history_prod_shadow_combined.csv`
+After each settlement, a postprocessing step rebuilds this combined file, pairing
+the call + put legs of each expiry (per token) into **one straddle row**. Columns:
+
+`open_day, expiry_day, call_open_time, put_open_time, call_instId, put_instId,
+expiry_time, call_sell_px, put_sell_px, open_premium, call_expiry, put_expiry,
+call_expiry_pnl, put_expiry_pnl, close_pnl, fee, net_pnl`
+
+where (amounts in the option's coin):
+- `open_premium` = `(call_sell_px·sz + put_sell_px·sz) − fee` (premium net of fees)
+- `call_expiry_pnl` / `put_expiry_pnl` = `−intrinsic` for that leg (0 if it
+  expired worthless; the `*_expiry` column reads `expired_profit` / `expired_loss`)
+- `close_pnl` = `call_expiry_pnl + put_expiry_pnl`
+- `fee` = total entry + settlement fees for both legs
+- `net_pnl` = `open_premium + close_pnl` = the straddle's all-in realized PnL
+
+The file is rebuilt in full from the settled rows on every settlement
+(idempotent). Open timestamps and contract size are recovered from the position
+store by `position_id`.
+
 ## Optional notifications
 Set `TELEGRAM_BOT_TOKEN_SHADOW` and `TELEGRAM_CHAT_ID_SHADOW` env vars to get
 fill/settlement messages; otherwise everything is logged to

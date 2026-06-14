@@ -211,6 +211,7 @@ class ShadowBroker:
     def __init__(self):
         self.store = PositionStore(configuration.SHADOW_POSITIONS_STORE)
         self.csv_path = configuration.SHADOW_HISTORY_CSV
+        self.combined_csv_path = configuration.SHADOW_HISTORY_COMBINED_CSV
 
     # ---- read side (mirrors live get_option_summary) ----
     def get_option_summary(self, token: str, direction: str) -> dict:
@@ -428,6 +429,17 @@ class ShadowBroker:
 
             result = self._settle_one(pos, settle_px, provisional)
             settled.append(result)
+
+        # Postprocess: rebuild the combined per-straddle file after settlements
+        # are recorded (idempotent full rebuild from the settled CSV rows).
+        if settled:
+            try:
+                from app_shadow.postprocess import build_combined_history
+                build_combined_history(
+                    self.csv_path, self.combined_csv_path, self.store.positions
+                )
+            except Exception as e:
+                logger.error(f"[postprocess] combined build failed: {e}", exc_info=True)
 
         return settled
 

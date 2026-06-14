@@ -45,6 +45,7 @@ class Configuration:
 
     # Shadow-only output artifacts (kept separate from the live executed_orders.csv)
     SHADOW_HISTORY_CSV = "data/straddles_history_prod_shadow.csv"
+    SHADOW_HISTORY_COMBINED_CSV = "data/straddles_history_prod_shadow_combined.csv"
     SHADOW_POSITIONS_STORE = "data/shadow_positions.json"
 
     # Always read the REAL production market (mainnet) — this is the whole point:
