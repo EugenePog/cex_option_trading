@@ -89,6 +89,20 @@ const makeReportingApp = (env) => ({
   error_file:  `./data/logs/app-reporting-${env}.err.log`,
 });
 
+// Shadow (paper) trading daemon — real mainnet market data, simulated fills.
+const makeShadowApp = (env) => ({
+  ...baseConfig,
+  name:          `deribit-straddle-shadow`,
+  args:          `-m app_shadow`,
+  cwd:           ROOT_BY_ENV[env],
+  autorestart:   true,
+  max_restarts:  10,
+  restart_delay: 10000,
+  min_uptime:    "30s",
+  out_file:      `./data/logs/deribit-straddle-shadow.out.log`,
+  error_file:    `./data/logs/deribit-straddle-shadow.err.log`,
+});
+
 module.exports = {
   apps: ENVS.flatMap((env) => [makeStrategyApp(env), makeReportingApp(env)]),
 };
