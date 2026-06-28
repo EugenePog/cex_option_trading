@@ -46,7 +46,18 @@ class Configuration:
     # Shadow-only output artifacts (kept separate from the live executed_orders.csv)
     SHADOW_HISTORY_CSV = "data/straddles_history_prod_shadow.csv"
     SHADOW_HISTORY_COMBINED_CSV = "data/straddles_history_prod_shadow_combined.csv"
+    SHADOW_REAL_TRADES_CSV = "data/straddles_history_prod_shadow_real_trades.csv"
     SHADOW_POSITIONS_STORE = "data/shadow_positions.json"
+
+    # ---- Open-price source (1st priority) -------------------------------
+    # Preferred entry price = average of REAL trades executed on the leg's
+    # instrument within a UTC time window TODAY (default 08:00–08:15), rounded
+    # to TRADE_PRICE_DECIMALS. If no trades occurred in that window, fall back
+    # to the marketable top-of-book fill (best_bid for SHORT / best_ask for LONG).
+    TRADE_PRICE_FROM_WINDOW = True
+    TRADE_PRICE_WINDOW_START = "08:00"   # UTC HH:MM
+    TRADE_PRICE_WINDOW_END = "08:05"     # UTC HH:MM
+    TRADE_PRICE_DECIMALS = 4
 
     # Always read the REAL production market (mainnet) — this is the whole point:
     # real liquidity / real bid-ask so the simulated PnL is production-grade.

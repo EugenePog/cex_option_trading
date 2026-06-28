@@ -2,6 +2,11 @@
 
 Default mode = long-running loop, refreshing every REPORT_INTERVAL_SEC seconds.
 --once = run a single cycle and exit (useful with PM2 cron_restart).
+
+Current solution switched to working with combined shadow file.
+To return to prod:
+1. uncomment rows 60-66
+2. In config.py switch to straddles_history_demo_acc: STRADDLES_CSV    = DATA_DIR / "straddles_history_prod_shadow_combined.csv" #"straddles_history_demo_acc.csv"
 """
 import logging
 import signal
@@ -52,13 +57,13 @@ def _build_summary_message(sheet_url: str) -> str:
 def run_once() -> None:
     log.info("=== Reporting cycle start ===")
 
-    raw       = fetch_trades(config.API_KEY, config.API_SECRET,
-                             config.FLAG, config.CURRENCIES)
-    log.info(f"raw data: {raw}")
-    trades    = parse_trades(raw)
-    straddles = combine_straddle_trades(trades)
+    #raw       = fetch_trades(config.API_KEY, config.API_SECRET,
+    #                         config.FLAG, config.CURRENCIES)
+    #log.info(f"raw data: {raw}")
+    #trades    = parse_trades(raw)
+    #straddles = combine_straddle_trades(trades)
 
-    save_straddles(straddles, config.STRADDLES_CSV)
+    #save_straddles(straddles, config.STRADDLES_CSV)
 
     sheet_id, sheet_url = upload_csv_as_gsheet(
         csv_path=str(config.STRADDLES_CSV),

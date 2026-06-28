@@ -13,7 +13,7 @@ LOG_DIR      = DATA_DIR / "logs"
 
 CREDENTIALS_PATH = PROJECT_ROOT / "credentials.json"
 TOKEN_PATH       = PROJECT_ROOT / "token.json"
-STRADDLES_CSV    = DATA_DIR / "straddles_history_demo_acc.csv"
+STRADDLES_CSV    = DATA_DIR / "straddles_history_prod_shadow_combined.csv" #"straddles_history_demo_acc.csv"
 
 # --- Deribit ---
 API_KEY    = os.getenv("DERIBIT_DEMO_CLIENT_ID")
@@ -33,7 +33,7 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
 ]
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
-GSHEET_NAME      = os.getenv("GSHEET_NAME", "Deribit_straddles_history_demo_acc")
+GSHEET_NAME      = os.getenv("GSHEET_NAME", "Deribit_straddles_history_prod_shadow")
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_TEST")

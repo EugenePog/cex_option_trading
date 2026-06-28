@@ -207,11 +207,38 @@ def _upsert_csv(row: dict, path: str, key_field: str = "position_id"):
 # Shadow broker
 # ====================================================================
 
+REAL_TRADES_FIELDS = ["option", "token", "option_type", "trade_time", "price", "size", "iv"]
+
+
+def _window_bounds_today(start_hhmm: str, end_hhmm: str) -> tuple:
+    """UTC ms bounds for a HH:MM–HH:MM window on TODAY's date."""
+    now = datetime.now(timezone.utc)
+    sh, sm = map(int, start_hhmm.split(":"))
+    eh, em = map(int, end_hhmm.split(":"))
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    end = now.replace(hour=eh, minute=em, second=59, microsecond=999000)
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+def _append_real_trades_csv(rows: list, path: str):
+    if not rows:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    exists = os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=REAL_TRADES_FIELDS)
+        if not exists:
+            writer.writeheader()
+        for r in rows:
+            writer.writerow({k: _fmt(r.get(k, "")) for k in REAL_TRADES_FIELDS})
+
+
 class ShadowBroker:
     def __init__(self):
         self.store = PositionStore(configuration.SHADOW_POSITIONS_STORE)
         self.csv_path = configuration.SHADOW_HISTORY_CSV
         self.combined_csv_path = configuration.SHADOW_HISTORY_COMBINED_CSV
+        self.real_trades_csv_path = configuration.SHADOW_REAL_TRADES_CSV
 
     # ---- read side (mirrors live get_option_summary) ----
     def get_option_summary(self, token: str, direction: str) -> dict:
@@ -243,26 +270,109 @@ class ShadowBroker:
         resting orders to cancel. Returns the live-compatible shape."""
         return {"status": "ok", "cancelled": [], "failed": []}
 
+    # ---- average price from real trades in the configured window ----
+    def _window_avg_price(self, inst_id: str) -> tuple:
+        """1st-priority price: average of REAL trades executed on this leg's
+        instrument within the configured UTC window today. Returns
+        (avg_price_rounded, trades) or (None, []) if disabled / no trades."""
+        if not configuration.TRADE_PRICE_FROM_WINDOW:
+            return None, []
+        start_ms, end_ms = _window_bounds_today(
+            configuration.TRADE_PRICE_WINDOW_START, configuration.TRADE_PRICE_WINDOW_END
+        )
+        try:
+            trades = mkt.get_trades_in_window(inst_id, start_ms, end_ms)
+        except ValueError as e:
+            logger.warning(f"[{inst_id}] trades fetch failed: {e}")
+            return None, []
+        if not trades:
+            return None, []
+        avg = sum(float(t["price"]) for t in trades) / len(trades)
+        return round(avg, configuration.TRADE_PRICE_DECIMALS), trades
+
+    def _record_real_trades(self, inst_id: str, meta: dict, trades: list):
+        """Persist the real trades used to compute the open price."""
+        rows = []
+        for t in trades:
+            ts = t.get("timestamp")
+            when = (
+                datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                .strftime("%Y-%m-%d %H:%M:%S.%f UTC")
+                if ts else ""
+            )
+            rows.append({
+                "option": inst_id,
+                "token": meta["token"],
+                "option_type": meta["option_type"],
+                "trade_time": when,
+                "price": float(t.get("price", 0) or 0),
+                "size": float(t.get("amount", 0) or 0),
+                "iv": float(t.get("iv", 0) or 0) if t.get("iv") is not None else "",
+            })
+        _append_real_trades_csv(rows, self.real_trades_csv_path)
+
     # ---- fill simulation for one leg ----
     def _simulate_leg(self, inst_id: str, size: float, slippage: float,
                       bid_ask_threshold: float, direction: str) -> dict:
         """
-        Simulate a marketable fill against the live order book.
-        Returns a leg dict in the same shape the live strategy consumes,
-        or a leg with state='cancelled' if the market is untradeable.
+        Determine the open price for one leg.
+
+        1st priority: the average of REAL trades executed on this instrument
+        within the configured UTC window today (rounded to TRADE_PRICE_DECIMALS).
+        Fallback (no trades in window): a marketable fill at the live top of
+        book — best_bid for SHORT, best_ask for LONG.
+
+        Returns a leg dict in the shape the strategy consumes, or a leg with
+        state='cancelled' if the market is untradeable.
         """
         meta = _parse_instrument(inst_id)
         try:
             inst = mkt.get_instrument(inst_id)
-            ticker = mkt.get_ticker(inst_id)
         except ValueError as e:
-            logger.warning(f"[{inst_id}] market read failed: {e}")
+            logger.warning(f"[{inst_id}] instrument read failed: {e}")
             return self._failed_leg(inst_id, meta, "1", str(e))
 
         contract_size = float(inst.get("contract_size", 1) or 1)
         tick_size = float(inst.get("tick_size", 0.0001) or 0.0001)
         settlement_period = inst.get("settlement_period", "")
         expiration_ts = int(inst.get("expiration_timestamp", 0) or 0)
+
+        # ---- 1st priority: average of real window trades ----
+        avg_px, window_trades = self._window_avg_price(inst_id)
+        if avg_px is not None and avg_px > 0:
+            self._record_real_trades(inst_id, meta, window_trades)
+            fill_px = avg_px
+            entry_fee = _trade_fee(fill_px, contract_size, size)
+            logger.info(
+                f"[FILL-TRADES] {inst_id} {direction} sz={size} @ avg {fill_px} "
+                f"(from {len(window_trades)} real trade(s) in "
+                f"{configuration.TRADE_PRICE_WINDOW_START}–{configuration.TRADE_PRICE_WINDOW_END} UTC) "
+                f"fee={entry_fee:.8f}"
+            )
+            return {
+                "instId": inst_id,
+                "ordId": f"shadow-{uuid.uuid4().hex[:12]}",
+                "px": fill_px,
+                "sCode": "0",
+                "sMsg": "",
+                "state": "filled",
+                "fill_sz": size,
+                "avg_px": fill_px,
+                "fee": entry_fee,
+                "fill_time": _now_str(),
+                "_contract_size": contract_size,
+                "_settlement_period": settlement_period,
+                "_expiration_ts": expiration_ts,
+                "_meta": meta,
+            }
+
+        # ---- Fallback: marketable top-of-book fill ----
+        logger.info(f"[{inst_id}] no trades in window — falling back to top-of-book fill")
+        try:
+            ticker = mkt.get_ticker(inst_id)
+        except ValueError as e:
+            logger.warning(f"[{inst_id}] ticker read failed: {e}")
+            return self._failed_leg(inst_id, meta, "1", str(e))
 
         # Same tradable-state guard as the live get_option_mark_price.
         if ticker.get("state") != "open":

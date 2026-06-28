@@ -152,6 +152,44 @@ def get_option_instruments(token: str) -> list:
     )
 
 
+def get_trades_in_window(inst_id: str, start_ms: int, end_ms: int,
+                         max_pages: int = 200) -> list:
+    """
+    Real executed trades for an instrument within [start_ms, end_ms] (UTC ms).
+
+    Uses the backward-paged method proven in diag_deribit_trades.py: page
+    /public/get_last_trades_by_instrument newest-first with include_old=true,
+    walking back via end_seq until we pass the start of the window. Works for
+    both live and recently-expired instruments.
+
+    Returns trades sorted oldest-first; each trade dict includes at least
+    `timestamp` (ms), `price`, `amount`, `iv`, `direction`, `trade_seq`.
+    """
+    found: list = []
+    end_seq = None
+    for _ in range(max_pages):
+        params = {
+            "instrument_name": inst_id,
+            "count": 1000,
+            "include_old": "true",
+            "sorting": "desc",
+        }
+        if end_seq is not None:
+            params["end_seq"] = end_seq
+        res = _public_get("/public/get_last_trades_by_instrument", params)
+        trades = res.get("trades", [])
+        if not trades:
+            break
+        oldest = min(t["timestamp"] for t in trades)
+        found += [t for t in trades if start_ms <= t["timestamp"] <= end_ms]
+        if oldest < start_ms or not res.get("has_more"):
+            break
+        end_seq = min(t["trade_seq"] for t in trades) - 1
+
+    found.sort(key=lambda t: t["timestamp"])
+    return found
+
+
 def get_iv_and_greeks(inst_id: str) -> dict | None:
     """IV (decimal) + greeks, same shape as the live get_iv_by_inst_id_rest."""
     try:
