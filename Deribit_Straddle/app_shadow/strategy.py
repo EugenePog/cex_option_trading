@@ -95,6 +95,26 @@ class ShadowStraddleShort:
         logger.info(f"Closest PUT:  {closest_put}")
 
         if call_to_open > 0 or put_to_open > 0:
+            # Snapshot the target C/P order books NOW (timeframe_start, e.g.
+            # 08:01) and persist them. This is the book the no-trades fallback
+            # will price off — captured here rather than at window-close. Deduped
+            # per instrument/day and reloaded on restart (failure resistance).
+            await loop.run_in_executor(
+                None, self.broker.snapshot_order_book,
+                [closest_call["instId"], closest_put["instId"]],
+            )
+
+            # Wait for the real-trade pricing window (e.g. 08:00–08:15 UTC) to
+            # fully close before opening, so the open price is the average over
+            # the WHOLE window rather than a partial window or a premature
+            # order-book fallback. We retry on the next cycle once it closes.
+            if self.broker.should_wait_for_trade_window():
+                logger.info(
+                    f"[ShadowStraddleShort] {self.token} — waiting for trade-price "
+                    f"window to close before opening (skipping this cycle)"
+                )
+                return
+
             position = await loop.run_in_executor(
                 None, self.broker.open_position,
                 closest_call["instId"], closest_put["instId"],

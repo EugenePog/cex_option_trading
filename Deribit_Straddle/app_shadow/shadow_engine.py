@@ -209,6 +209,49 @@ def _upsert_csv(row: dict, path: str, key_field: str = "position_id"):
 
 REAL_TRADES_FIELDS = ["option", "token", "option_type", "trade_time", "price", "size", "iv"]
 
+ORDER_BOOK_FIELDS = ["timestamp", "instrument", "bid_price", "ask_price", "bid_size", "ask_size"]
+
+
+def _append_order_book_csv(rows: list, path: str):
+    if not rows:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    exists = os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=ORDER_BOOK_FIELDS)
+        if not exists:
+            writer.writeheader()
+        for r in rows:
+            writer.writerow({k: _fmt(r.get(k, "")) for k in ORDER_BOOK_FIELDS})
+
+
+def _load_today_order_books(path: str) -> dict:
+    """Load the EARLIEST order-book snapshot per instrument for today's date
+    (UTC) from the order-book CSV. Used so a restart still has the
+    timeframe-start book for the no-trades fallback (failure resistance)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    earliest: dict = {}
+    if not os.path.exists(path):
+        return earliest
+    try:
+        with open(path, newline="") as f:
+            for r in csv.DictReader(f):
+                ts = r.get("timestamp", "")
+                if not ts.startswith(today):
+                    continue
+                inst = r.get("instrument", "")
+                if inst and (inst not in earliest or ts < earliest[inst]["timestamp"]):
+                    earliest[inst] = {
+                        "timestamp": ts,
+                        "bid_price": r.get("bid_price", ""),
+                        "ask_price": r.get("ask_price", ""),
+                        "bid_size": r.get("bid_size", ""),
+                        "ask_size": r.get("ask_size", ""),
+                    }
+    except OSError as e:
+        logger.warning(f"Failed to read order-book CSV: {e}")
+    return earliest
+
 
 def _window_bounds_today(start_hhmm: str, end_hhmm: str) -> tuple:
     """UTC ms bounds for a HH:MM–HH:MM window on TODAY's date."""
@@ -239,6 +282,10 @@ class ShadowBroker:
         self.csv_path = configuration.SHADOW_HISTORY_CSV
         self.combined_csv_path = configuration.SHADOW_HISTORY_COMBINED_CSV
         self.real_trades_csv_path = configuration.SHADOW_REAL_TRADES_CSV
+        self.order_book_csv_path = configuration.SHADOW_ORDER_BOOK_CSV
+        # Earliest (timeframe-start) order-book snapshot per instrument for today,
+        # seeded from the CSV so a restart still has it for the fallback.
+        self._early_books = _load_today_order_books(self.order_book_csv_path)
 
     # ---- read side (mirrors live get_option_summary) ----
     def get_option_summary(self, token: str, direction: str) -> dict:
@@ -269,6 +316,61 @@ class ShadowBroker:
         """No-op in the marketable model — fills are instant, so there are no
         resting orders to cancel. Returns the live-compatible shape."""
         return {"status": "ok", "cancelled": [], "failed": []}
+
+    # ---- order-book snapshot (taken at timeframe_start) ----
+    def snapshot_order_book(self, inst_ids: list):
+        """Capture the live top-of-book for the target instruments ONCE per day
+        (at the first/timeframe-start tick) and persist it. Deduped per
+        instrument/day; reloaded from CSV on restart so the timeframe-start book
+        survives a crash. This snapshot is what the no-trades fallback prices off
+        — not the book at window-close."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        new_rows = []
+        for inst_id in inst_ids:
+            if inst_id in self._early_books:
+                continue  # already have today's earliest snapshot
+            try:
+                t = mkt.get_ticker(inst_id)
+            except ValueError as e:
+                logger.warning(f"[{inst_id}] order-book snapshot failed: {e}")
+                continue
+            ts = _now_str()
+            snap = {
+                "timestamp": ts,
+                "bid_price": t.get("best_bid_price", ""),
+                "ask_price": t.get("best_ask_price", ""),
+                "bid_size": t.get("best_bid_amount", ""),
+                "ask_size": t.get("best_ask_amount", ""),
+            }
+            self._early_books[inst_id] = snap
+            new_rows.append({"instrument": inst_id, **snap})
+            logger.info(
+                f"[ORDERBOOK] snapshot {inst_id} bid={snap['bid_price']}({snap['bid_size']}) "
+                f"ask={snap['ask_price']}({snap['ask_size']}) @ {ts}"
+            )
+        if new_rows:
+            _append_order_book_csv(new_rows, self.order_book_csv_path)
+
+    def _get_early_book(self, inst_id: str) -> dict | None:
+        return self._early_books.get(inst_id)
+
+    # ---- wait until the trade-price window has fully closed ----
+    def should_wait_for_trade_window(self) -> bool:
+        """True if the real-trade pricing window for TODAY has not yet closed.
+
+        The open price (tier 1) is the AVERAGE of trades over the whole window
+        (default 08:00–08:15 UTC), so we must let the full window elapse before
+        opening — otherwise we'd price off a partial window or fall back to the
+        order book prematurely. Returns False once the window has closed (then
+        the engine uses the window average, or falls back if it was empty), or
+        if the feature is disabled."""
+        if not configuration.TRADE_PRICE_FROM_WINDOW:
+            return False
+        _, end_ms = _window_bounds_today(
+            configuration.TRADE_PRICE_WINDOW_START, configuration.TRADE_PRICE_WINDOW_END
+        )
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        return now_ms < end_ms
 
     # ---- average price from real trades in the configured window ----
     def _window_avg_price(self, inst_id: str) -> tuple:
@@ -366,20 +468,9 @@ class ShadowBroker:
                 "_meta": meta,
             }
 
-        # ---- Fallback: marketable top-of-book fill ----
-        logger.info(f"[{inst_id}] no trades in window — falling back to top-of-book fill")
-        try:
-            ticker = mkt.get_ticker(inst_id)
-        except ValueError as e:
-            logger.warning(f"[{inst_id}] ticker read failed: {e}")
-            return self._failed_leg(inst_id, meta, "1", str(e))
-
-        # Same tradable-state guard as the live get_option_mark_price.
-        if ticker.get("state") != "open":
-            msg = f"{inst_id} not tradeable: state={ticker.get('state')}"
-            logger.warning(msg)
-            return self._failed_leg(inst_id, meta, "1", msg)
-
+        # ---- Fallback: top-of-book fill priced off the timeframe-start book ----
+        # Per design, when the window has no trades we price off the order book
+        # captured at timeframe_start (e.g. 08:01), NOT the book at window-close.
         def sf(v):
             try:
                 f = float(v)
@@ -387,10 +478,25 @@ class ShadowBroker:
             except (ValueError, TypeError):
                 return None
 
-        bid_px = sf(ticker.get("best_bid_price"))
-        ask_px = sf(ticker.get("best_ask_price"))
+        early = self._get_early_book(inst_id)
+        if early is not None:
+            bid_px = sf(early.get("bid_price"))
+            ask_px = sf(early.get("ask_price"))
+            book_src = f"timeframe-start book @ {early.get('timestamp')}"
+        else:
+            # Last resort (no early snapshot, e.g. restarted after window): use
+            # the current book and persist it so it's not lost.
+            logger.info(f"[{inst_id}] no early order-book snapshot — using current book")
+            self.snapshot_order_book([inst_id])
+            early = self._get_early_book(inst_id) or {}
+            bid_px = sf(early.get("bid_price"))
+            ask_px = sf(early.get("ask_price"))
+            book_src = "current book (no early snapshot)"
+
+        logger.info(f"[{inst_id}] no trades in window — falling back to {book_src}")
+
         if bid_px is None or ask_px is None:
-            msg = f"No valid bid/ask for {inst_id} — illiquid"
+            msg = f"No valid bid/ask for {inst_id} — illiquid ({book_src})"
             logger.warning(msg)
             return self._failed_leg(inst_id, meta, "1", msg)
 

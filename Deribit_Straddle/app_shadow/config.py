@@ -47,6 +47,7 @@ class Configuration:
     SHADOW_HISTORY_CSV = "data/straddles_history_prod_shadow.csv"
     SHADOW_HISTORY_COMBINED_CSV = "data/straddles_history_prod_shadow_combined.csv"
     SHADOW_REAL_TRADES_CSV = "data/straddles_history_prod_shadow_real_trades.csv"
+    SHADOW_ORDER_BOOK_CSV = "data/straddles_history_prod_shadow_order_book.csv"
     SHADOW_POSITIONS_STORE = "data/shadow_positions.json"
 
     # ---- Open-price source (1st priority) -------------------------------
