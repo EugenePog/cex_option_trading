@@ -120,7 +120,13 @@ class StrategyMonitor:
                     "executed_orders_path": config["executed_orders_path"],
                     "price_time_flag": config["price_time_flag"],
                     "price_time": config["price_time"],
-                    "check_interval": config["check_interval"]
+                    "check_interval": config["check_interval"],
+                    # aditional config for maker mode
+                    "pricing_mode": config["pricing_mode"],
+                    "step_down_interval": config["step_down_interval"],
+                    "step_down_value": config["step_down_value"],
+                    "chase_timeout": config["chase_timeout"],
+                    "post_only": config["post_only"]
                     # add other config mapping here
                 }
 

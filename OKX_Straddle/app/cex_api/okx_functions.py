@@ -5,6 +5,7 @@ import okx.PublicData as PublicData
 import okx.Trade as Trade
 from typing import Optional
 import time
+import math
 
 def get_otm_next_expiry(
         api_key:     str,
@@ -610,14 +611,14 @@ def get_order_status(tradeAPI, instId: str, ordId: str) -> dict:
 def wait_for_fill(tradeAPI, instId: str, ordId: str, timeout: int = 30, interval: int = 2) -> dict:
     """
     Poll until order is filled or cancelled.
-    States: live, partially_filled, filled, cancelled, mmp_canceled
+    States: live, partially_filled, filled, cancelled, canceled, mmp_canceled
     """
     elapsed = 0
     while elapsed < timeout:
         order = get_order_status(tradeAPI, instId, ordId)
         state = order.get("state")
 
-        if state in ("filled", "cancelled", "mmp_canceled"):
+        if state in ("filled", "cancelled", "canceled", "mmp_canceled"):
             return order
         
         logger.info(f"Order {ordId} state: {state}, waiting...")
@@ -1085,3 +1086,497 @@ def get_option_summary(
     }
 
     return result
+
+###########################################################
+# functions for maker mode
+###########################################################
+
+def round_to_tick_dir(price: float, tick_size: float, mode: str = "nearest") -> float:
+    """
+    Round price to the tick grid, returning a float.
+ 
+    mode:
+        "nearest" — standard rounding
+        "up"      — never round below the input (used for SHORT floor: we must not sell below it)
+        "down"    — never round above the input (used for LONG ceiling)
+    """
+    if mode == "up":
+        ticks = math.ceil(price / tick_size - 1e-9)
+    elif mode == "down":
+        ticks = math.floor(price / tick_size + 1e-9)
+    else:
+        ticks = round(price / tick_size)
+    return round(ticks * tick_size, 8)
+ 
+ 
+def px_to_str(price: float) -> str:
+    """Format a price/size for the OKX API without float artifacts ('0.0525', not '0.052500000001')."""
+    s = f"{price:.8f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+ 
+ 
+def get_price_anchors(marketAPI, publicAPI, instId: str, bid_ask_threshold: float) -> dict:
+    """
+    Collect all price anchors for an option in one place:
+        bid / ask  — top of book (ticker)
+        mid        — (bid + ask) / 2
+        mark       — OKX model mark price (/public/mark-price), may be None if unavailable
+ 
+    Raises ValueError when the book is unusable (missing bid/ask, or relative
+    spread wider than bid_ask_threshold — same validation as get_option_mark_price).
+    """
+    response = marketAPI.get_ticker(instId=instId)
+    if response.get("code") != "0" or not response.get("data"):
+        raise ValueError(f"Failed to get ticker for {instId}: {response.get('msg')}")
+    data = response["data"][0]
+ 
+    def safe_float(val) -> Optional[float]:
+        if val is None or val == "" or val == "0" or val == "0.0":
+            return None
+        try:
+            f = float(val)
+            return f if f > 0 else None
+        except (ValueError, TypeError):
+            return None
+ 
+    bid_px = safe_float(data.get("bidPx"))
+    ask_px = safe_float(data.get("askPx"))
+ 
+    if bid_px is None or ask_px is None:
+        raise ValueError(f"No valid bid/ask price found for {instId}")
+ 
+    spread_ratio = abs(bid_px - ask_px) / max(bid_px, ask_px)
+    if spread_ratio > bid_ask_threshold:
+        raise ValueError(
+            f"No valid price for {instId}: bid/ask spread {spread_ratio:.4f} > threshold {bid_ask_threshold}"
+        )
+ 
+    mark_px = None
+    try:
+        mp = publicAPI.get_mark_price(instType="OPTION", instId=instId)
+        if mp.get("code") == "0" and mp.get("data"):
+            mark_px = safe_float(mp["data"][0].get("markPx"))
+    except Exception as e:
+        logger.warning(f"Failed to get mark price for {instId}: {e}")
+ 
+    anchors = {
+        "bid":  bid_px,
+        "ask":  ask_px,
+        "mid":  (bid_px + ask_px) / 2,
+        "mark": mark_px,
+        "last": safe_float(data.get("last")),
+    }
+    logger.info(
+        f"{instId} anchors — bid: {bid_px}, ask: {ask_px}, "
+        f"mid: {anchors['mid']}, mark: {mark_px}"
+    )
+    return anchors
+ 
+ 
+def compute_chase_bounds(anchors: dict, slippage: float, direction: str, tick_sz: float) -> dict:
+    """
+    Compute start price and worst-acceptable price for the chase loop.
+ 
+    SHORT (selling):
+        start = ask (passive maker quote; or floor if floor > ask)
+        floor = max(mid, mark, bid) * (1 - slippage)   — never sell below this
+    LONG (buying):
+        start = bid
+        ceiling = min(mid, mark, ask) * (1 + slippage) — never buy above this
+ 
+    Returns {"start": float, "limit": float} — both aligned to the tick grid,
+    with the limit rounded so rounding can never violate the bound.
+    """
+    if direction == "SHORT":
+        candidates = [anchors["mid"], anchors["bid"]]
+        if anchors.get("mark"):
+            candidates.append(anchors["mark"])
+        limit_px = round_to_tick_dir(max(candidates) * (1 - slippage), tick_sz, "up")
+        start_px = round_to_tick_dir(max(anchors["ask"], limit_px), tick_sz, "up")
+    else:
+        candidates = [anchors["mid"], anchors["ask"]]
+        if anchors.get("mark"):
+            candidates.append(anchors["mark"])
+        limit_px = round_to_tick_dir(min(candidates) * (1 + slippage), tick_sz, "down")
+        start_px = round_to_tick_dir(min(anchors["bid"], limit_px), tick_sz, "down")
+ 
+    return {"start": start_px, "limit": limit_px}
+ 
+ 
+def _best_touch(marketAPI, instId: str) -> tuple:
+    """Lightweight best bid/ask fetch, (None, None) on any failure."""
+    try:
+        r = marketAPI.get_ticker(instId=instId)
+        d = (r.get("data") or [{}])[0]
+        bid = float(d.get("bidPx") or 0) or None
+        ask = float(d.get("askPx") or 0) or None
+        return bid, ask
+    except Exception:
+        return None, None
+ 
+
+def _order_acc_fill(order: dict) -> tuple:
+    """Extract (accumulated fill size, avg px, fee) from an order snapshot."""
+    acc = float(order.get("accFillSz") or order.get("fillSz") or 0)
+    avg = float(order.get("avgPx") or 0)
+    fee = float(order.get("fee") or 0)
+    return acc, avg, fee
+ 
+ 
+def _leg_record_order_fills(leg: dict, order: dict):
+    """Store fills of an order snapshot into the leg accumulator (one entry per ordId)."""
+    acc, avg, fee = _order_acc_fill(order)
+    ord_id = order.get("ordId")
+    if acc > 0 and ord_id:
+        leg["fills"][ord_id] = {"sz": acc, "px": avg, "fee": fee}
+    leg["filled_sz"] = sum(f["sz"] for f in leg["fills"].values())
+    if order.get("fillTime"):
+        leg["fill_time"] = order.get("fillTime")
+ 
+ 
+def _leg_place(tradeAPI, leg: dict, side: str, ord_type: str, px: float, sz: float) -> bool:
+    """Place (or re-place) an order for one leg. Returns True on success."""
+    response = tradeAPI.place_order(
+        instId=leg["instId"], tdMode="cross", side=side,
+        ordType=ord_type, sz=px_to_str(sz), px=px_to_str(px)
+    )
+    data = (response.get("data") or [{}])[0]
+    if response.get("code") == "0" and data.get("sCode") == "0":
+        leg["ordId"]    = data.get("ordId")
+        leg["ord_type"] = ord_type
+        leg["px"]       = px
+        leg["sCode"], leg["sMsg"] = "0", ""
+        logger.info(f"[chase] {leg['name']} placed {ord_type} @ {px_to_str(px)} sz {px_to_str(sz)} — ordId {leg['ordId']}")
+        return True
+    leg["sCode"] = data.get("sCode") or response.get("code")
+    leg["sMsg"]  = data.get("sMsg")  or response.get("msg")
+    logger.error(f"[chase] {leg['name']} placement failed: {leg['sMsg']}")
+    return False
+ 
+ 
+def open_position_maker(
+        call_instId:        str,
+        put_instId:         str,
+        size_call:          int,
+        size_put:           int,
+        api_key:            str,
+        secret_key:         str,
+        passphrase:         str,
+        flag:               str = "0",
+        slippage:           float = 0.05,
+        bid_ask_threshold:  float = 0.5,
+        direction:          str = "SHORT",
+        step_down_interval: int = 5,
+        step_down_value:    int = 1,
+        chase_timeout:      int = 120,
+        post_only:          bool = True,
+        poll_interval:      int = 1
+) -> dict:
+    """
+    Maker-style position opening with a price-chase loop (alternative to open_position,
+    which crosses the spread immediately).
+ 
+    Per leg, for SHORT:
+        1. Start with a passive limit SELL at the ask (post_only by default,
+           so it always rests as maker and earns maker fees).
+        2. If unfilled after `step_down_interval` seconds, amend the order
+           down by `step_down_value` ticks.
+        3. Never go below the floor:
+               floor = max(mid, mark, bid) * (1 - slippage)
+           where mark is the OKX model mark price. Once the floor is reached
+           the order keeps resting there.
+        4. If an amend of a post_only order would cross the book (new px <= best bid),
+           OKX would cancel it — instead we cancel it ourselves and re-place the
+           remaining size as a plain limit, which fills at the touch (>= our price).
+        5. After `chase_timeout` seconds, any unfilled remainder is LEFT RESTING
+           at its last price. The strategy's _close_all_open_orders() cancels
+           leftovers at the start of the next cycle.
+ 
+    LONG is symmetric: start at bid, step up, ceiling = min(mid, mark, ask) * (1 + slippage).
+ 
+    Both legs are placed in a single batch request and then chased in parallel
+    inside one loop (no leg waits for the other).
+ 
+    Args (new vs open_position):
+        step_down_interval : seconds between price improvements toward the market
+        step_down_value    : number of ticks per improvement step
+        chase_timeout      : total seconds to run the chase loop
+        post_only          : True → rest as maker only; False → plain limit orders
+        poll_interval      : seconds between order-state polls
+        slippage           : defines the floor/ceiling (see above), NOT an immediate
+                             crossing offset like in open_position
+ 
+    Returns:
+        dict with the same shape as open_position:
+        {"status", "call": {instId, ordId, px, sCode, sMsg, state, fill_sz, avg_px, fee, fill_time}, "put": {...}}
+        state is "filled" | "partially_filled" | "timeout" (still resting) | "cancelled"
+    """
+
+    logger.info(
+        "[chase] open_position_maker started — "
+        f"call_instId: {call_instId}, put_instId: {put_instId}, "
+        f"size_call: {size_call}, size_put: {size_put}, "
+        f"direction: {direction}, flag: {flag}, "
+        f"slippage: {slippage}, bid_ask_threshold: {bid_ask_threshold}, "
+        f"step_down_interval: {step_down_interval}s, step_down_value: {step_down_value} tick(s), "
+        f"chase_timeout: {chase_timeout}s, post_only: {post_only}, poll_interval: {poll_interval}s"
+    )
+ 
+ 
+    tradeAPI = Trade.TradeAPI(
+        api_key=api_key, api_secret_key=secret_key, passphrase=passphrase,
+        use_server_time=False, flag=flag
+    )
+    marketAPI = MarketData.MarketAPI(
+        api_key=api_key, api_secret_key=secret_key, passphrase=passphrase,
+        use_server_time=False, flag=flag
+    )
+    publicAPI = PublicData.PublicAPI(
+        api_key=api_key, api_secret_key=secret_key, passphrase=passphrase,
+        use_server_time=False, flag=flag
+    )
+ 
+    side          = "sell" if direction == "SHORT" else "buy"
+    init_ord_type = "post_only" if post_only else "limit"
+ 
+    # ----------------------------------------------------------------
+    # Step 0: Build leg state machines
+    # ----------------------------------------------------------------
+    legs = []
+    for name, inst_id, sz in (("call", call_instId, size_call), ("put", put_instId, size_put)):
+        if sz <= 0:
+            continue
+        legs.append({
+            "name": name, "instId": inst_id, "sz": float(sz),
+            "ordId": None, "ord_type": init_ord_type,
+            "px": None, "limit_px": None, "tick": None,
+            "fills": {}, "filled_sz": 0.0, "fill_time": None,
+            "done": False, "replace_attempts": 0,
+            "sCode": "0", "sMsg": "",
+            "last_step_ts": time.time(),
+        })
+ 
+    if not legs:
+        logger.info("No legs to open — both sizes are 0")
+        return {"status": "skipped", "call": None, "put": None}
+ 
+    # ----------------------------------------------------------------
+    # Step 1: Anchors, tick sizes, chase bounds per leg
+    # ----------------------------------------------------------------
+    try:
+        for leg in legs:
+            leg["tick"] = get_tick_size(publicAPI, leg["instId"])
+            anchors     = get_price_anchors(marketAPI, publicAPI, leg["instId"], bid_ask_threshold)
+            bounds      = compute_chase_bounds(anchors, slippage, direction, leg["tick"])
+            leg["px"], leg["limit_px"] = bounds["start"], bounds["limit"]
+ 
+            # Detailed anchors / bounds logging
+            spread_ratio = abs(anchors["bid"] - anchors["ask"]) / max(anchors["bid"], anchors["ask"])
+            floor_basis  = (max if direction == "SHORT" else min)(
+                [v for v in (anchors["mid"], anchors["mark"],
+                             anchors["bid"] if direction == "SHORT" else anchors["ask"]) if v]
+            )
+            logger.info(
+                f"[chase] {leg['name']} {leg['instId']} anchors — "
+                f"bid: {px_to_str(anchors['bid'])}, ask: {px_to_str(anchors['ask'])}, "
+                f"mid: {px_to_str(anchors['mid'])}, "
+                f"mark: {px_to_str(anchors['mark']) if anchors['mark'] else 'N/A'}, "
+                f"last: {px_to_str(anchors['last']) if anchors['last'] else 'N/A'}, "
+                f"spread: {spread_ratio:.4%} (threshold: {bid_ask_threshold})"
+            )
+            logger.info(
+                f"[chase] {leg['name']} {leg['instId']} bounds — "
+                f"tickSz: {leg['tick']}, sz: {px_to_str(leg['sz'])}, "
+                f"start_px: {px_to_str(leg['px'])}, "
+                f"{'floor' if direction == 'SHORT' else 'ceiling'}: {px_to_str(leg['limit_px'])} "
+                f"(= {'max' if direction == 'SHORT' else 'min'}(mid, mark, "
+                f"{'bid' if direction == 'SHORT' else 'ask'}) {px_to_str(floor_basis)} "
+                f"× (1 {'-' if direction == 'SHORT' else '+'} {slippage})), "
+                f"distance: {abs(leg['px'] - leg['limit_px']) / leg['tick']:.0f} tick(s) "
+                f"≈ {abs(leg['px'] - leg['limit_px']) / leg['tick'] / step_down_value * step_down_interval:.0f}s to reach at current step settings"
+            )
+    except ValueError as e:
+        logger.error(f"[chase] Pre-trade validation failed: {e}")
+        return {"status": "error", "error": str(e), "call": None, "put": None}
+ 
+    # ----------------------------------------------------------------
+    # Step 2: Initial batch placement (both legs in one request)
+    # ----------------------------------------------------------------
+    orders = [{
+        "instId": leg["instId"], "tdMode": "cross", "side": side,
+        "ordType": init_ord_type, "sz": px_to_str(leg["sz"]), "px": px_to_str(leg["px"])
+    } for leg in legs]
+    logger.info(f"[chase] Initial orders: {orders}")
+ 
+    try:
+        response = tradeAPI.place_multiple_orders(orders)
+    except Exception as e:
+        logger.error(f"[chase] Batch placement failed: {e}")
+        return {"status": "error", "error": str(e), "call": None, "put": None}
+ 
+    results = response.get("data") or []
+    for i, leg in enumerate(legs):
+        res = results[i] if i < len(results) else {}
+        if res.get("sCode") == "0":
+            leg["ordId"] = res.get("ordId")
+        else:
+            # e.g. post_only rejected because book is locked/crossed → retry as plain limit
+            logger.warning(
+                f"[chase] {leg['name']} initial {init_ord_type} rejected "
+                f"({res.get('sCode')}: {res.get('sMsg')}), retrying as limit"
+            )
+            if not _leg_place(tradeAPI, leg, side, "limit", leg["px"], leg["sz"]):
+                leg["done"] = True   # leg failed to place at all
+ 
+    # ----------------------------------------------------------------
+    # Step 3: Chase loop — poll both legs, step price toward floor
+    # ----------------------------------------------------------------
+    deadline = time.time() + chase_timeout
+    while time.time() < deadline and any(not l["done"] for l in legs):
+        time.sleep(poll_interval)
+        now = time.time()
+ 
+        for leg in legs:
+            if leg["done"] or not leg["ordId"]:
+                continue
+ 
+            order = get_order_status(tradeAPI, leg["instId"], leg["ordId"])
+            state = order.get("state", "")
+ 
+            if state == "filled":
+                _leg_record_order_fills(leg, order)
+                leg["done"] = True
+                logger.info(f"[chase] {leg['name']} FILLED — avg px: {order.get('avgPx')}")
+                continue
+ 
+            if state in ("canceled", "cancelled", "mmp_canceled"):
+                # External cancel or post_only auto-cancel: collect partial fills,
+                # re-place the remainder as a plain limit at the current chase price.
+                _leg_record_order_fills(leg, order)
+                remaining = leg["sz"] - leg["filled_sz"]
+                if remaining <= 0:
+                    leg["done"] = True
+                elif leg["replace_attempts"] < 3:
+                    leg["replace_attempts"] += 1
+                    logger.warning(f"[chase] {leg['name']} order canceled, re-placing remaining {px_to_str(remaining)}")
+                    if not _leg_place(tradeAPI, leg, side, "limit", leg["px"], remaining):
+                        leg["done"] = True
+                else:
+                    logger.error(f"[chase] {leg['name']} canceled too many times, giving up")
+                    leg["done"] = True
+                continue
+ 
+            # state is live / partially_filled → maybe step the price
+            if now - leg["last_step_ts"] < step_down_interval:
+                continue
+ 
+            if direction == "SHORT":
+                new_px = max(
+                    round_to_tick_dir(leg["px"] - step_down_value * leg["tick"], leg["tick"], "up"),
+                    leg["limit_px"]
+                )
+            else:
+                new_px = min(
+                    round_to_tick_dir(leg["px"] + step_down_value * leg["tick"], leg["tick"], "down"),
+                    leg["limit_px"]
+                )
+ 
+            if new_px == leg["px"]:
+                # already resting at the floor/ceiling — keep waiting
+                leg["last_step_ts"] = now
+                continue
+ 
+            # Would the new price cross the book? Amending a post_only order into
+            # the touch gets it canceled by OKX, so cross deliberately instead.
+            crosses = False
+            if leg["ord_type"] == "post_only":
+                bid, ask = _best_touch(marketAPI, leg["instId"])
+                if direction == "SHORT" and bid is not None:
+                    crosses = new_px <= bid
+                elif direction == "LONG" and ask is not None:
+                    crosses = new_px >= ask
+ 
+            if crosses:
+                try:
+                    tradeAPI.cancel_order(instId=leg["instId"], ordId=leg["ordId"])
+                except Exception as e:
+                    logger.warning(f"[chase] {leg['name']} cancel before cross failed: {e}")
+                snapshot = get_order_status(tradeAPI, leg["instId"], leg["ordId"])
+                _leg_record_order_fills(leg, snapshot)
+                remaining = leg["sz"] - leg["filled_sz"]
+                if remaining <= 0:
+                    leg["done"] = True
+                else:
+                    logger.info(f"[chase] {leg['name']} crossing the book with limit @ {px_to_str(new_px)}")
+                    if not _leg_place(tradeAPI, leg, side, "limit", new_px, remaining):
+                        leg["done"] = True
+                leg["last_step_ts"] = now
+            else:
+                amend  = tradeAPI.amend_order(instId=leg["instId"], ordId=leg["ordId"], newPx=px_to_str(new_px))
+                a_data = (amend.get("data") or [{}])[0]
+                if amend.get("code") == "0" and a_data.get("sCode") == "0":
+                    leg["px"] = new_px
+                    logger.info(
+                        f"[chase] {leg['name']} amended → {px_to_str(new_px)} "
+                        f"(floor: {px_to_str(leg['limit_px'])})"
+                    )
+                else:
+                    # order may have just filled or been canceled — resolved on next poll
+                    logger.info(f"[chase] {leg['name']} amend rejected: {a_data.get('sMsg') or amend.get('msg')}")
+                leg["last_step_ts"] = now
+ 
+    # ----------------------------------------------------------------
+    # Step 4: Final snapshot — legs still working are left resting
+    # ----------------------------------------------------------------
+    for leg in legs:
+        if not leg["done"] and leg["ordId"]:
+            order = get_order_status(tradeAPI, leg["instId"], leg["ordId"])
+            _leg_record_order_fills(leg, order)
+            leg["final_state"] = order.get("state", "")
+            logger.warning(
+                f"[chase] {leg['name']} chase timeout — order {leg['ordId']} left resting "
+                f"@ {px_to_str(leg['px'])} (state: {leg['final_state']}, "
+                f"filled: {px_to_str(leg['filled_sz'])}/{px_to_str(leg['sz'])})"
+            )
+ 
+    # ----------------------------------------------------------------
+    # Step 5: Build result in open_position-compatible format
+    # ----------------------------------------------------------------
+    def _leg_result(leg: dict) -> dict:
+        total = leg["filled_sz"]
+        if total >= leg["sz"]:
+            state = "filled"
+        elif leg.get("final_state") in ("live", "partially_filled"):
+            state = "timeout"          # still resting on the book
+        elif total > 0:
+            state = "partially_filled"
+        else:
+            state = "cancelled"
+ 
+        avg_px = ""
+        fee    = ""
+        if total > 0:
+            avg_px = px_to_str(sum(f["sz"] * f["px"] for f in leg["fills"].values()) / total)
+            fee    = px_to_str(sum(f["fee"] for f in leg["fills"].values()))
+ 
+        return {
+            "instId":  leg["instId"],
+            "ordId":   leg["ordId"],
+            "px":      px_to_str(leg["px"]) if leg["px"] else "",
+            "sCode":   leg["sCode"],
+            "sMsg":    leg["sMsg"],
+            "state":   state,
+            "fill_sz": px_to_str(total),
+            "avg_px":  avg_px,
+            "fee":     fee,
+            "fill_time": datetime.fromtimestamp(
+                int(leg["fill_time"]) / 1000, tz=timezone.utc
+            ).strftime('%Y-%m-%d %H:%M:%S UTC') if leg.get("fill_time") else None,
+        }
+ 
+    result = {"status": "placed", "call": None, "put": None}
+    for leg in legs:
+        result[leg["name"]] = _leg_result(leg)
+ 
+    return result
+ 
