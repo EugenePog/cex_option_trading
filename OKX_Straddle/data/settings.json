@@ -18,8 +18,8 @@
     "okx_position_size_multiplier": 100,
     "straddle_short_strategy": {
       "run_flag": 1,
-      "check_interval": 120,
-      "slippage_tolerance": 0.025,
+      "check_interval": 60,
+      "slippage_tolerance": 0.05,
       "bid_ask_threshold": 0.1,
       "amount": 0.01,
       "timeframe_days": ["TUE", "WED", "THU", "FRI", "SAT"],
