@@ -729,3 +729,612 @@ def close_all_open_options(
         "cancelled": cancelled,
         "failed":    failed,
     }
+
+
+# ====================================================================
+# Maker-style opening with a price-chase loop
+# (Deribit port of okx_functions.open_position_maker and helpers)
+# ====================================================================
+
+def round_to_tick_dir(price: float, tick_size: float, mode: str = "nearest") -> float:
+    """
+    Round price to the tick grid, returning a float.
+
+    mode:
+        "nearest" — standard rounding
+        "up"      — never round below the input (used for SHORT floor: we must not sell below it)
+        "down"    — never round above the input (used for LONG ceiling)
+    """
+    if mode == "up":
+        ticks = math.ceil(price / tick_size - 1e-9)
+    elif mode == "down":
+        ticks = math.floor(price / tick_size + 1e-9)
+    else:
+        ticks = round(price / tick_size)
+    return round(ticks * tick_size, 8)
+
+
+def px_to_str(price: float) -> str:
+    """Format a price/size for logs and API params without float artifacts."""
+    s = f"{price:.8f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+
+def get_last_trade_in_window(
+        api_key:      str,
+        api_secret:   str,
+        flag:         str,
+        instId:       str,
+        window_start: str,
+        window_end:   str
+) -> dict | None:
+    """
+    Get the most recent REAL public trade for an option, restricted to TODAY (UTC)
+    within [window_start, window_end] — "HH:MM" strings, normally the strategy's
+    config values timeframe_start / timeframe_end (e.g. "08:01" / "08:30").
+
+    Notes vs OKX:
+      - Deribit has a purpose-built endpoint with server-side time filtering:
+        /public/get_last_trades_by_instrument_and_time. No client-side filtering
+        of 500 recent trades like OKX — the window is exact.
+      - Trade side field is "direction" ("buy"/"sell" = aggressor), size field
+        is "amount" (contracts; 1 contract = 1 BTC on Deribit BTC options).
+
+    Returns:
+        {"px", "sz", "side", "ts", "time_utc", "age_sec", "trades_in_window"}
+        or None if no trades in the window / lookup failed (always non-fatal).
+        trades_in_window is capped at 100 (query count limit).
+    """
+    try:
+        h1, m1 = map(int, window_start.split(":"))
+        h2, m2 = map(int, window_end.split(":"))
+    except (ValueError, AttributeError):
+        logger.warning(
+            f"Invalid trade window '{window_start}'-'{window_end}' for {instId} — skipping last-trade lookup"
+        )
+        return None
+
+    today    = datetime.now(timezone.utc)
+    start_ts = int(today.replace(hour=h1, minute=m1, second=0,  microsecond=0).timestamp() * 1000)
+    end_ts   = int(today.replace(hour=h2, minute=m2, second=59, microsecond=999000).timestamp() * 1000)
+
+    try:
+        result = _deribit_get(
+            api_key, api_secret, flag,
+            "/public/get_last_trades_by_instrument_and_time",
+            {
+                "instrument_name": instId,
+                "start_timestamp": start_ts,
+                "end_timestamp":   end_ts,
+                "count":           100,
+                "sorting":         "desc",   # newest first
+            },
+        )
+    except ValueError as e:
+        logger.warning(f"Failed to get trades for {instId}: {e}")
+        return None
+
+    trades = [t for t in (result.get("trades") or []) if float(t.get("price") or 0) > 0]
+
+    if not trades:
+        logger.info(f"{instId} — no real trades today within {window_start}-{window_end} UTC")
+        return None
+
+    t  = trades[0]                       # sorting=desc → first is the most recent
+    ts = int(t.get("timestamp") or 0)
+    last_trade = {
+        "px":               float(t["price"]),
+        "sz":               float(t.get("amount") or 0),
+        "side":             t.get("direction", ""),        # aggressor side
+        "ts":               ts,
+        "time_utc":         datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M:%S") if ts else "",
+        "age_sec":          int(time.time() - ts / 1000) if ts else None,
+        "trades_in_window": len(trades),
+    }
+    logger.info(
+        f"{instId} — last real trade in window {window_start}-{window_end} UTC: "
+        f"px {last_trade['px']}, sz {last_trade['sz']}, side {last_trade['side']}, "
+        f"at {last_trade['time_utc']} UTC ({last_trade['trades_in_window']} trade(s) in window)"
+    )
+    return last_trade
+
+
+def get_price_anchors(
+        api_key:            str,
+        api_secret:         str,
+        flag:               str,
+        instId:             str,
+        bid_ask_threshold:  float,
+        trade_window_start: str = None,
+        trade_window_end:   str = None
+) -> dict:
+    """
+    Collect all price anchors for an option in one place:
+        bid / ask  — top of book (ticker)
+        mid        — (bid + ask) / 2
+        mark       — Deribit mark price (same ticker response — no separate
+                     endpoint like OKX's /public/mark-price)
+        last_trade — most recent real trade TODAY within [trade_window_start,
+                     trade_window_end] UTC; None if window not given or empty
+
+    Raises ValueError when the instrument is not tradeable (state != "open",
+    e.g. volatility auction / pre-settlement lock) or the book is unusable
+    (missing bid/ask, or relative spread wider than bid_ask_threshold) —
+    same validation as get_option_mark_price.
+    """
+    result = _deribit_get(
+        api_key, api_secret, flag,
+        "/public/ticker",
+        {"instrument_name": instId},
+    )
+
+    # Deribit-specific: refuse instruments that aren't actively trading
+    state = result.get("state")
+    if state != "open":
+        raise ValueError(f"{instId} not tradeable: state={state}")
+
+    def safe_float(val):
+        try:
+            f = float(val)
+            return f if f > 0 else None
+        except (ValueError, TypeError):
+            return None
+
+    bid_px = safe_float(result.get("best_bid_price"))
+    ask_px = safe_float(result.get("best_ask_price"))
+
+    if bid_px is None or ask_px is None:
+        raise ValueError(f"No valid bid/ask price found for {instId}")
+
+    spread_ratio = abs(bid_px - ask_px) / max(bid_px, ask_px)
+    if spread_ratio > bid_ask_threshold:
+        raise ValueError(
+            f"No valid price for {instId}: bid/ask spread {spread_ratio:.4f} > threshold {bid_ask_threshold}"
+        )
+
+    mark_px = safe_float(result.get("mark_price"))
+
+    # Last real trade today within the configured window (non-fatal, may be None)
+    last_trade = None
+    if trade_window_start and trade_window_end:
+        last_trade = get_last_trade_in_window(
+            api_key, api_secret, flag, instId, trade_window_start, trade_window_end
+        )
+
+    anchors = {
+        "bid":        bid_px,
+        "ask":        ask_px,
+        "mid":        (bid_px + ask_px) / 2,
+        "mark":       mark_px,
+        "last":       safe_float(result.get("last_price")),   # ticker last (price only, any time)
+        "last_trade": last_trade,                             # real trade in today's window
+    }
+    logger.info(
+        f"{instId} anchors — bid: {bid_px}, ask: {ask_px}, "
+        f"mid: {anchors['mid']}, mark: {mark_px}, last_trade: {last_trade}"
+    )
+    return anchors
+
+
+def compute_chase_bounds(anchors: dict, slippage: float, direction: str, tick_sz: float) -> dict:
+    """
+    Compute start price and worst-acceptable price for the chase loop.
+    (Identical math to the OKX version.)
+
+    SHORT (selling):
+        start = ask (passive maker quote; or floor if floor > ask)
+        floor = max(mid, mark, bid) * (1 - slippage)   — never sell below this
+    LONG (buying):
+        start = bid
+        ceiling = min(mid, mark, ask) * (1 + slippage) — never buy above this
+    """
+    if direction == "SHORT":
+        candidates = [anchors["mid"], anchors["bid"], anchors["last_trade"]]
+        if anchors.get("mark"):
+            candidates.append(anchors["mark"])
+        limit_px = round_to_tick_dir(max(candidates) * (1 - slippage), tick_sz, "up")
+        start_px = round_to_tick_dir(max(anchors["ask"], limit_px), tick_sz, "up")
+    else:
+        candidates = [anchors["mid"], anchors["ask"], anchors["last_trade"]]
+        if anchors.get("mark"):
+            candidates.append(anchors["mark"])
+        limit_px = round_to_tick_dir(min(candidates) * (1 + slippage), tick_sz, "down")
+        start_px = round_to_tick_dir(min(anchors["bid"], limit_px), tick_sz, "down")
+
+    return {"start": start_px, "limit": limit_px}
+
+
+def _best_touch(api_key: str, api_secret: str, flag: str, instId: str) -> tuple:
+    """Lightweight best bid/ask fetch, (None, None) on any failure."""
+    try:
+        r = _deribit_get(
+            api_key, api_secret, flag,
+            "/public/ticker",
+            {"instrument_name": instId},
+            retries=0,
+        )
+        bid = float(r.get("best_bid_price") or 0) or None
+        ask = float(r.get("best_ask_price") or 0) or None
+        return bid, ask
+    except Exception:
+        return None, None
+
+
+def _order_acc_fill(order: dict) -> tuple:
+    """
+    Extract (accumulated fill size, avg px, fee) from a Deribit order snapshot.
+    Deribit fields: filled_amount (cumulative), average_price, commission.
+    """
+    acc = float(order.get("filled_amount") or 0)
+    avg = float(order.get("average_price") or 0)
+    fee = float(order.get("commission") or 0)
+    return acc, avg, fee
+
+
+def _leg_record_order_fills(leg: dict, order: dict):
+    """Store fills of an order snapshot into the leg accumulator (one entry per order_id)."""
+    acc, avg, fee = _order_acc_fill(order)
+    ord_id = order.get("order_id")
+    if acc > 0 and ord_id:
+        leg["fills"][ord_id] = {"sz": acc, "px": avg, "fee": fee}
+    leg["filled_sz"] = sum(f["sz"] for f in leg["fills"].values())
+    if order.get("last_update_timestamp"):
+        leg["fill_time"] = order.get("last_update_timestamp")
+
+
+def _leg_place_chase(api_key: str, api_secret: str, flag: str,
+                     leg: dict, direction: str, ord_type: str, px: float, sz: float) -> bool:
+    """
+    Place (or re-place) an order for one leg via /private/sell | /private/buy.
+
+    Notes vs OKX:
+      - post_only on Deribit does NOT reject/cancel a crossing order by default —
+        with reject_post_only=false the exchange ADJUSTS the price to rest just
+        outside the spread. We therefore sync leg["px"] from the actual order
+        price in the response, which may differ from what we asked for.
+      - retries=0 always: a lost response on a placement call must never be
+        retried (double-order risk).
+    """
+    endpoint = "/private/sell" if direction == "SHORT" else "/private/buy"
+    params = {
+        "instrument_name":  leg["instId"],
+        "amount":           sz,
+        "type":             "limit",
+        "price":            _format_price(px, leg["tick"]),
+        "post_only":        "true" if ord_type == "post_only" else "false",
+        "reject_post_only": "false",
+    }
+    try:
+        resp = _deribit_get(api_key, api_secret, flag, endpoint, params, retries=0)
+    except ValueError as e:
+        leg["sCode"], leg["sMsg"] = "1", str(e)
+        logger.error(f"[chase] {leg['name']} placement failed: {e}")
+        return False
+
+    order = resp.get("order", {})
+    leg["ordId"]      = order.get("order_id")
+    leg["ord_type"]   = ord_type
+    leg["px"]         = float(order.get("price") or px)   # may be auto-adjusted by post_only
+    leg["ord_amount"] = sz
+    leg["sCode"], leg["sMsg"] = "0", ""
+    logger.info(
+        f"[chase] {leg['name']} placed {ord_type} @ {px_to_str(leg['px'])} "
+        f"(requested {px_to_str(px)}) sz {px_to_str(sz)} — ordId {leg['ordId']}"
+    )
+    return True
+
+
+def _leg_edit_chase(api_key: str, api_secret: str, flag: str,
+                    leg: dict, new_px: float, post_only: bool) -> bool:
+    """
+    Amend a working order's price via /private/edit.
+
+    Notes vs OKX:
+      - Deribit's edit REQUIRES the amount param — we pass the order's amount.
+      - post_only can be flipped on edit: passing post_only=false with a
+        crossing price executes against the book (this replaces the OKX
+        cancel + re-place dance for intentional crossing).
+    """
+    params = {
+        "order_id":  leg["ordId"],
+        "amount":    leg["ord_amount"],
+        "price":     _format_price(new_px, leg["tick"]),
+        "post_only": "true" if post_only else "false",
+    }
+    try:
+        resp = _deribit_get(api_key, api_secret, flag, "/private/edit", params, retries=0)
+    except ValueError as e:
+        # order may have just filled / been cancelled — resolved on next poll
+        logger.info(f"[chase] {leg['name']} edit rejected: {e}")
+        return False
+
+    order = resp.get("order", {})
+    leg["px"] = float(order.get("price") or new_px)
+    if not post_only:
+        leg["ord_type"] = "limit"
+    return True
+
+
+def open_position_maker(
+        call_instId:        str,
+        put_instId:         str,
+        size_call:          float,
+        size_put:           float,
+        api_key:            str,
+        api_secret:         str,
+        flag:               str = "1",
+        slippage:           float = 0.05,
+        bid_ask_threshold:  float = 0.5,
+        direction:          str = "SHORT",
+        step_down_interval: int = 5,
+        step_down_value:    int = 1,
+        chase_timeout:      int = 120,
+        post_only:          bool = True,
+        trade_window_start: str = None,
+        trade_window_end:   str = None,
+        poll_interval:      int = 1
+) -> dict:
+    """
+    Maker-style position opening with a price-chase loop (alternative to
+    open_position, which crosses the spread immediately).
+
+    Same algorithm and parametrisation as okx_functions.open_position_maker:
+        1. passive limit at the ask (SHORT), post_only by default;
+        2. unfilled after `step_down_interval` sec → price moved
+           `step_down_value` ticks toward the market (/private/edit);
+        3. floor = max(mid, mark, bid) * (1 - slippage) — never sell below it,
+           order keeps resting once the floor is reached;
+        4. a step that would cross the book is executed deliberately by
+           editing with post_only=false (Deribit-specific: edit can flip
+           post_only, so no cancel + re-place like OKX);
+        5. on `chase_timeout` the unfilled remainder is LEFT RESTING —
+           the strategy's _close_all_open_orders() cancels it next cycle.
+
+    Notes vs OKX:
+      - no passphrase; flag "1" = testnet, "0" = live;
+      - Deribit has NO batch endpoint → legs are placed sequentially, then
+        chased in parallel in one loop (single-leg exposure risk between
+        the two placements is the same as in open_position);
+      - prices are in the underlying currency (BTC/ETH), sizes in contracts
+        (1 contract = 1 BTC — position_size_multiplier must reflect that);
+      - trade_window_start/end ("HH:MM" UTC, strategy's timeframe_start/end)
+        bound the last-real-trade anchor lookup.
+
+    Returns: dict shaped exactly like open_position (strategy-compatible):
+        {"status", "call": {instId, ordId, px, sCode, sMsg, state, fill_sz,
+                            avg_px, fee, fill_time}, "put": {...}}
+        state: "filled" | "partially_filled" | "timeout" (still resting) | "cancelled"
+    """
+    logger.info(
+        "[chase] open_position_maker started — "
+        f"call_instId: {call_instId}, put_instId: {put_instId}, "
+        f"size_call: {size_call}, size_put: {size_put}, "
+        f"direction: {direction}, flag: {flag}, "
+        f"slippage: {slippage}, bid_ask_threshold: {bid_ask_threshold}, "
+        f"step_down_interval: {step_down_interval}s, step_down_value: {step_down_value} tick(s), "
+        f"chase_timeout: {chase_timeout}s, post_only: {post_only}, poll_interval: {poll_interval}s, "
+        f"trade_window: {trade_window_start}-{trade_window_end} UTC"
+    )
+
+    init_ord_type = "post_only" if post_only else "limit"
+
+    # ----------------------------------------------------------------
+    # Step 0: Build leg state machines
+    # ----------------------------------------------------------------
+    legs = []
+    for name, inst_id, sz in (("call", call_instId, size_call), ("put", put_instId, size_put)):
+        if sz <= 0:
+            continue
+        legs.append({
+            "name": name, "instId": inst_id, "sz": float(sz),
+            "ordId": None, "ord_type": init_ord_type, "ord_amount": float(sz),
+            "px": None, "limit_px": None, "tick": None,
+            "fills": {}, "filled_sz": 0.0, "fill_time": None,
+            "done": False, "replace_attempts": 0,
+            "sCode": "0", "sMsg": "",
+            "last_step_ts": time.time(),
+        })
+
+    if not legs:
+        logger.info("No legs to open — both sizes are 0")
+        return {"status": "skipped", "call": None, "put": None}
+
+    # ----------------------------------------------------------------
+    # Step 1: Anchors, tick sizes, chase bounds per leg
+    # ----------------------------------------------------------------
+    try:
+        for leg in legs:
+            leg["tick"] = get_tick_size(api_key, api_secret, flag, leg["instId"])
+            anchors     = get_price_anchors(api_key, api_secret, flag, leg["instId"], bid_ask_threshold,
+                                            trade_window_start, trade_window_end)
+            bounds      = compute_chase_bounds(anchors, slippage, direction, leg["tick"])
+            leg["px"], leg["limit_px"] = bounds["start"], bounds["limit"]
+
+            # Detailed anchors / bounds logging
+            spread_ratio = abs(anchors["bid"] - anchors["ask"]) / max(anchors["bid"], anchors["ask"])
+            floor_basis  = (max if direction == "SHORT" else min)(
+                [v for v in (anchors["mid"], anchors["mark"],
+                             anchors["bid"] if direction == "SHORT" else anchors["ask"]) if v]
+            )
+            lt = anchors.get("last_trade")
+            if lt:
+                lt_str = (
+                    f"{px_to_str(lt['px'])} ({lt['side'] or '?'} {px_to_str(lt['sz'])} "
+                    f"@ {lt['time_utc']} UTC, {lt['trades_in_window']} trade(s) in window)"
+                )
+            else:
+                lt_str = f"N/A (no trades in {trade_window_start}-{trade_window_end} UTC today)"
+            logger.info(
+                f"[chase] {leg['name']} {leg['instId']} anchors — "
+                f"bid: {px_to_str(anchors['bid'])}, ask: {px_to_str(anchors['ask'])}, "
+                f"mid: {px_to_str(anchors['mid'])}, "
+                f"mark: {px_to_str(anchors['mark']) if anchors['mark'] else 'N/A'}, "
+                f"last: {px_to_str(anchors['last']) if anchors['last'] else 'N/A'}, "
+                f"last_trade: {lt_str}, "
+                f"spread: {spread_ratio:.4%} (threshold: {bid_ask_threshold})"
+            )
+            logger.info(
+                f"[chase] {leg['name']} {leg['instId']} bounds — "
+                f"tick_size: {leg['tick']}, sz: {px_to_str(leg['sz'])}, "
+                f"start_px: {px_to_str(leg['px'])}, "
+                f"{'floor' if direction == 'SHORT' else 'ceiling'}: {px_to_str(leg['limit_px'])} "
+                f"(= {'max' if direction == 'SHORT' else 'min'}(mid, mark, "
+                f"{'bid' if direction == 'SHORT' else 'ask'}) {px_to_str(floor_basis)} "
+                f"× (1 {'-' if direction == 'SHORT' else '+'} {slippage})), "
+                f"distance: {abs(leg['px'] - leg['limit_px']) / leg['tick']:.0f} tick(s) "
+                f"≈ {abs(leg['px'] - leg['limit_px']) / leg['tick'] / step_down_value * step_down_interval:.0f}s to reach at current step settings"
+            )
+    except ValueError as e:
+        logger.error(f"[chase] Pre-trade validation failed: {e}")
+        return {"status": "error", "error": str(e), "call": None, "put": None}
+
+    # ----------------------------------------------------------------
+    # Step 2: Initial placement — sequential (Deribit has no batch endpoint)
+    # ----------------------------------------------------------------
+    for leg in legs:
+        if not _leg_place_chase(api_key, api_secret, flag, leg, direction,
+                                init_ord_type, leg["px"], leg["sz"]):
+            # e.g. rejected → one retry as plain limit at the same price
+            logger.warning(f"[chase] {leg['name']} initial {init_ord_type} rejected, retrying as limit")
+            if not _leg_place_chase(api_key, api_secret, flag, leg, direction,
+                                    "limit", leg["px"], leg["sz"]):
+                leg["done"] = True   # leg failed to place at all
+
+    # ----------------------------------------------------------------
+    # Step 3: Chase loop — poll both legs, step price toward floor
+    # ----------------------------------------------------------------
+    deadline = time.time() + chase_timeout
+    while time.time() < deadline and any(not l["done"] for l in legs):
+        time.sleep(poll_interval)
+        now = time.time()
+
+        for leg in legs:
+            if leg["done"] or not leg["ordId"]:
+                continue
+
+            order = get_order_status(api_key, api_secret, flag, leg["ordId"])
+            state = order.get("order_state", "")
+
+            if state == "filled":
+                _leg_record_order_fills(leg, order)
+                leg["done"] = True
+                logger.info(f"[chase] {leg['name']} FILLED — avg px: {order.get('average_price')}")
+                continue
+
+            if state in ("cancelled", "rejected"):
+                # External cancel / rejection: collect partial fills,
+                # re-place the remainder as a plain limit at the current chase price.
+                _leg_record_order_fills(leg, order)
+                remaining = leg["sz"] - leg["filled_sz"]
+                if remaining <= 0:
+                    leg["done"] = True
+                elif leg["replace_attempts"] < 3:
+                    leg["replace_attempts"] += 1
+                    logger.warning(f"[chase] {leg['name']} order {state}, re-placing remaining {px_to_str(remaining)}")
+                    if not _leg_place_chase(api_key, api_secret, flag, leg, direction,
+                                            "limit", leg["px"], remaining):
+                        leg["done"] = True
+                else:
+                    logger.error(f"[chase] {leg['name']} cancelled too many times, giving up")
+                    leg["done"] = True
+                continue
+
+            # state is open (live / partially filled) → maybe step the price
+            if now - leg["last_step_ts"] < step_down_interval:
+                continue
+
+            if direction == "SHORT":
+                new_px = max(
+                    round_to_tick_dir(leg["px"] - step_down_value * leg["tick"], leg["tick"], "up"),
+                    leg["limit_px"]
+                )
+            else:
+                new_px = min(
+                    round_to_tick_dir(leg["px"] + step_down_value * leg["tick"], leg["tick"], "down"),
+                    leg["limit_px"]
+                )
+
+            if new_px == leg["px"]:
+                # already resting at the floor/ceiling — keep waiting
+                leg["last_step_ts"] = now
+                continue
+
+            # Would the new price cross the book? A post_only edit into the touch
+            # would be silently re-priced by Deribit (not cancelled like OKX) —
+            # to cross deliberately, edit with post_only=false instead.
+            crosses = False
+            if leg["ord_type"] == "post_only":
+                bid, ask = _best_touch(api_key, api_secret, flag, leg["instId"])
+                if direction == "SHORT" and bid is not None:
+                    crosses = new_px <= bid
+                elif direction == "LONG" and ask is not None:
+                    crosses = new_px >= ask
+
+            if crosses:
+                logger.info(f"[chase] {leg['name']} crossing the book — edit to limit @ {px_to_str(new_px)}")
+                _leg_edit_chase(api_key, api_secret, flag, leg, new_px, post_only=False)
+            else:
+                if _leg_edit_chase(api_key, api_secret, flag, leg, new_px,
+                                   post_only=(leg["ord_type"] == "post_only")):
+                    logger.info(
+                        f"[chase] {leg['name']} amended → {px_to_str(leg['px'])} "
+                        f"(floor: {px_to_str(leg['limit_px'])})"
+                    )
+            leg["last_step_ts"] = now
+
+    # ----------------------------------------------------------------
+    # Step 4: Final snapshot — legs still working are left resting
+    # ----------------------------------------------------------------
+    for leg in legs:
+        if not leg["done"] and leg["ordId"]:
+            order = get_order_status(api_key, api_secret, flag, leg["ordId"])
+            _leg_record_order_fills(leg, order)
+            leg["final_state"] = order.get("order_state", "")
+            logger.warning(
+                f"[chase] {leg['name']} chase timeout — order {leg['ordId']} left resting "
+                f"@ {px_to_str(leg['px'])} (state: {leg['final_state']}, "
+                f"filled: {px_to_str(leg['filled_sz'])}/{px_to_str(leg['sz'])})"
+            )
+
+    # ----------------------------------------------------------------
+    # Step 5: Build result in open_position-compatible format
+    # ----------------------------------------------------------------
+    def _leg_result(leg: dict) -> dict:
+        total = leg["filled_sz"]
+        if total >= leg["sz"]:
+            state = "filled"
+        elif leg.get("final_state") == "open":
+            state = "timeout"          # still resting on the book
+        elif total > 0:
+            state = "partially_filled"
+        else:
+            state = "cancelled"
+
+        avg_px = ""
+        fee    = ""
+        if total > 0:
+            avg_px = px_to_str(sum(f["sz"] * f["px"] for f in leg["fills"].values()) / total)
+            fee    = px_to_str(sum(f["fee"] for f in leg["fills"].values()))
+
+        return {
+            "instId":  leg["instId"],
+            "ordId":   leg["ordId"],
+            "px":      px_to_str(leg["px"]) if leg["px"] else "",
+            "sCode":   leg["sCode"],
+            "sMsg":    leg["sMsg"],
+            "state":   state,
+            "fill_sz": px_to_str(total),
+            "avg_px":  avg_px,
+            "fee":     fee,
+            "fill_time": (
+                datetime.fromtimestamp(int(leg["fill_time"]) / 1000, tz=timezone.utc)
+                        .strftime('%Y-%m-%d %H:%M:%S UTC')
+                if leg.get("fill_time") else None
+            ),
+        }
+
+    result = {"status": "placed", "call": None, "put": None}
+    for leg in legs:
+        result[leg["name"]] = _leg_result(leg)
+
+    return result

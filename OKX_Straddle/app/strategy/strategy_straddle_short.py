@@ -97,8 +97,8 @@ class StrategyStraddleShort(StrategyBase):
         logger.info(f"Closest PUT: {closest_put}")
         
         if call_to_open > 0 or put_to_open > 0:
-            # pricing_mode: "maker" — maker mode: passive chase loop (open_position_maker),
-            #               "taker" — taker mode (open_position)
+            # pricing_mode: "maker" — passive chase loop (open_position_maker),
+            #               anything else — legacy spread-crossing (open_position)
             if self.config.get("pricing_mode", "taker") == "maker":
                 position = await loop.run_in_executor(
                     None, open_position_maker,
@@ -110,8 +110,10 @@ class StrategyStraddleShort(StrategyBase):
                     "SHORT",
                     self.config.get("step_down_interval", 5),    # seconds between price steps
                     self.config.get("step_down_value", 1),       # ticks per step
-                    self.config.get("chase_timeout", 30),       # total chase duration, seconds
-                    self.config.get("post_only", True)           # rest as maker only
+                    self.config.get("chase_timeout", 120),       # total chase duration, seconds
+                    self.config.get("post_only", True),          # rest as maker only
+                    self.config.get("timeframe_start", "08:01"),              # last-trade window start, "HH:MM" UTC
+                    self.config.get("timeframe_end", "08:30")                 # last-trade window end, "HH:MM" UTC
                 )
             else:
                 position = await loop.run_in_executor(

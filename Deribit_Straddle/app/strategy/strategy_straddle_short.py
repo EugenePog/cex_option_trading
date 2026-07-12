@@ -2,7 +2,7 @@ from app.functions import is_within_timeframe, is_allowed_day
 from app.strategy.strategy_base import StrategyBase
 import asyncio
 from app import logger
-from app.cex_api.deribit_trade_functions import open_position, close_all_open_options, get_option_summary, get_available_near_money_options, get_token_price
+from app.cex_api.deribit_trade_functions import open_position, open_position_maker, close_all_open_options, get_option_summary, get_available_near_money_options, get_token_price
 from app.functions import save_filled_orders_to_csv
 from app.cex_api.deribit_market_functions import get_iv_by_inst_id_rest
 
@@ -97,15 +97,34 @@ class StrategyStraddleShort(StrategyBase):
         logger.info(f"Closest PUT: {closest_put}")
         
         if call_to_open > 0 or put_to_open > 0:
-            position = await loop.run_in_executor(
-                None, open_position,
-                closest_call["instId"], closest_put["instId"],
-                call_to_open, put_to_open,
-                self.api_key, self.api_secret, self.flag,
-                self.config["slippage_tolerance"],
-                self.config["bid_ask_threshold"],
-                "SHORT"
-            )
+            # pricing_mode: "maker" — passive chase loop (open_position_maker),
+            #               anything else — legacy spread-crossing (open_position)
+            if self.config.get("pricing_mode", "taker") == "maker":
+                position = await loop.run_in_executor(
+                    None, open_position_maker,
+                    closest_call["instId"], closest_put["instId"],
+                    call_to_open, put_to_open,
+                    self.api_key, self.api_secret, self.flag,
+                    self.config["slippage_tolerance"],
+                    self.config["bid_ask_threshold"],
+                    "SHORT",
+                    self.config.get("step_down_interval", 5),    # seconds between price steps
+                    self.config.get("step_down_value", 1),       # ticks per step
+                    self.config.get("chase_timeout", 120),       # total chase duration, seconds
+                    self.config.get("post_only", True),          # rest as maker only
+                    self.config.get("timeframe_start", "08:01"),              # last-trade window start, "HH:MM" UTC
+                    self.config.get("timeframe_end", "08:30")                 # last-trade window end, "HH:MM" UTC
+                )
+            else:
+                position = await loop.run_in_executor(
+                    None, open_position,
+                    closest_call["instId"], closest_put["instId"],
+                    call_to_open, put_to_open,
+                    self.api_key, self.api_secret, self.flag,
+                    self.config["slippage_tolerance"],
+                    self.config["bid_ask_threshold"],
+                    "SHORT"
+                )
 
             logger.info(f"Openned position: {position}")
             if position and position.get("status") != "error":
@@ -156,5 +175,3 @@ class StrategyStraddleShort(StrategyBase):
                 logger.info(f"[ShortStraddle] No orders to close")
                 return
         logger.warning(f"[ShortStraddle] Failed to close orders after 10 attempts")
-
-    

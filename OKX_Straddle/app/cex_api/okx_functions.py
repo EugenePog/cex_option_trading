@@ -1113,14 +1113,92 @@ def px_to_str(price: float) -> str:
     """Format a price/size for the OKX API without float artifacts ('0.0525', not '0.052500000001')."""
     s = f"{price:.8f}".rstrip("0").rstrip(".")
     return s if s else "0"
+
+
+def get_last_trade_in_window(marketAPI, instId: str, window_start: str, window_end: str) -> Optional[dict]:
+    """
+    Get the most recent REAL public trade for an option (/market/trades),
+    restricted to TODAY (UTC) within [window_start, window_end] — "HH:MM" strings,
+    normally the strategy's config values timeframe_start / timeframe_end
+    (e.g. "08:01" / "08:30").
  
+    Unlike ticker "last", a real trade carries size, aggressor side and timestamp,
+    and the window guarantees the print belongs to today's trading session.
  
-def get_price_anchors(marketAPI, publicAPI, instId: str, bid_ask_threshold: float) -> dict:
+    Returns:
+        {
+            "px":               float,   # trade price
+            "sz":               float,   # trade size (contracts)
+            "side":             str,     # aggressor side ("buy"/"sell")
+            "ts":               int,     # trade timestamp, ms
+            "time_utc":         str,     # "HH:MM:SS"
+            "age_sec":          int,     # seconds since the trade
+            "trades_in_window": int      # how many trades happened in the window
+        }
+        or None if no trades in the window / lookup failed (always non-fatal).
+    """
+    try:
+        h1, m1 = map(int, window_start.split(":"))
+        h2, m2 = map(int, window_end.split(":"))
+    except (ValueError, AttributeError):
+        logger.warning(
+            f"Invalid trade window '{window_start}'-'{window_end}' for {instId} — skipping last-trade lookup"
+        )
+        return None
+ 
+    today    = datetime.now(timezone.utc)
+    start_ts = int(today.replace(hour=h1, minute=m1, second=0,  microsecond=0).timestamp() * 1000)
+    end_ts   = int(today.replace(hour=h2, minute=m2, second=59, microsecond=999000).timestamp() * 1000)
+ 
+    try:
+        # Most recent trades first; 500 is the endpoint max — plenty for one option series.
+        # Window filter below cuts everything outside today's [start, end].
+        response = marketAPI.get_trades(instId=instId, limit="500")
+    except Exception as e:
+        logger.warning(f"Failed to get trades for {instId}: {e}")
+        return None
+ 
+    if response.get("code") != "0":
+        logger.warning(f"Failed to get trades for {instId}: {response.get('msg')}")
+        return None
+ 
+    in_window = [
+        t for t in (response.get("data") or [])
+        if start_ts <= int(t.get("ts") or 0) <= end_ts and float(t.get("px") or 0) > 0
+    ]
+ 
+    if not in_window:
+        logger.info(f"{instId} — no real trades today within {window_start}-{window_end} UTC")
+        return None
+ 
+    t  = max(in_window, key=lambda x: int(x["ts"]))
+    ts = int(t["ts"])
+    last_trade = {
+        "px":               float(t["px"]),
+        "sz":               float(t.get("sz") or 0),
+        "side":             t.get("side", ""),
+        "ts":               ts,
+        "time_utc":         datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M:%S"),
+        "age_sec":          int(time.time() - ts / 1000),
+        "trades_in_window": len(in_window),
+    }
+    logger.info(
+        f"{instId} — last real trade in window {window_start}-{window_end} UTC: "
+        f"px {last_trade['px']}, sz {last_trade['sz']}, side {last_trade['side']}, "
+        f"at {last_trade['time_utc']} UTC ({last_trade['trades_in_window']} trade(s) in window)"
+    )
+    return last_trade
+  
+
+def get_price_anchors(marketAPI, publicAPI, instId: str, bid_ask_threshold: float,
+                      trade_window_start: str = None, trade_window_end: str = None) -> dict:
     """
     Collect all price anchors for an option in one place:
         bid / ask  — top of book (ticker)
         mid        — (bid + ask) / 2
         mark       — OKX model mark price (/public/mark-price), may be None if unavailable
+        last_trade — most recent real trade TODAY within [trade_window_start,
+                     trade_window_end] UTC; None if window not given or no trades in it
  
     Raises ValueError when the book is unusable (missing bid/ask, or relative
     spread wider than bid_ask_threshold — same validation as get_option_mark_price).
@@ -1159,18 +1237,25 @@ def get_price_anchors(marketAPI, publicAPI, instId: str, bid_ask_threshold: floa
     except Exception as e:
         logger.warning(f"Failed to get mark price for {instId}: {e}")
  
+    # Last real trade today within the configured window (non-fatal, may be None)
+    last_trade = None
+    if trade_window_start and trade_window_end:
+        last_trade = get_last_trade_in_window(marketAPI, instId, trade_window_start, trade_window_end)
+ 
     anchors = {
-        "bid":  bid_px,
-        "ask":  ask_px,
-        "mid":  (bid_px + ask_px) / 2,
-        "mark": mark_px,
-        "last": safe_float(data.get("last")),
+        "bid":        bid_px,
+        "ask":        ask_px,
+        "mid":        (bid_px + ask_px) / 2,
+        "mark":       mark_px,
+        "last":       safe_float(data.get("last")),   # ticker "last" (price only, any time)
+        "last_trade": last_trade,                     # real trade in today's window
     }
     logger.info(
         f"{instId} anchors — bid: {bid_px}, ask: {ask_px}, "
-        f"mid: {anchors['mid']}, mark: {mark_px}"
+        f"mid: {anchors['mid']}, mark: {mark_px}, last_trade: {last_trade}"
     )
     return anchors
+
  
  
 def compute_chase_bounds(anchors: dict, slippage: float, direction: str, tick_sz: float) -> dict:
@@ -1188,13 +1273,13 @@ def compute_chase_bounds(anchors: dict, slippage: float, direction: str, tick_sz
     with the limit rounded so rounding can never violate the bound.
     """
     if direction == "SHORT":
-        candidates = [anchors["mid"], anchors["bid"]]
+        candidates = [anchors["mid"], anchors["bid"], anchors["last_trade"]]
         if anchors.get("mark"):
             candidates.append(anchors["mark"])
         limit_px = round_to_tick_dir(max(candidates) * (1 - slippage), tick_sz, "up")
         start_px = round_to_tick_dir(max(anchors["ask"], limit_px), tick_sz, "up")
     else:
-        candidates = [anchors["mid"], anchors["ask"]]
+        candidates = [anchors["mid"], anchors["ask"], anchors["last_trade"]]
         if anchors.get("mark"):
             candidates.append(anchors["mark"])
         limit_px = round_to_tick_dir(min(candidates) * (1 + slippage), tick_sz, "down")
@@ -1254,6 +1339,7 @@ def _leg_place(tradeAPI, leg: dict, side: str, ord_type: str, px: float, sz: flo
     return False
  
  
+
 def open_position_maker(
         call_instId:        str,
         put_instId:         str,
@@ -1270,6 +1356,8 @@ def open_position_maker(
         step_down_value:    int = 1,
         chase_timeout:      int = 120,
         post_only:          bool = True,
+        trade_window_start: str = None,
+        trade_window_end:   str = None,
         poll_interval:      int = 1
 ) -> dict:
     """
@@ -1302,6 +1390,9 @@ def open_position_maker(
         step_down_value    : number of ticks per improvement step
         chase_timeout      : total seconds to run the chase loop
         post_only          : True → rest as maker only; False → plain limit orders
+        trade_window_start : "HH:MM" UTC — with trade_window_end, defines today's window
+                             for the last-real-trade anchor (strategy's timeframe_start)
+        trade_window_end   : "HH:MM" UTC (strategy's timeframe_end); both None → skip lookup
         poll_interval      : seconds between order-state polls
         slippage           : defines the floor/ceiling (see above), NOT an immediate
                              crossing offset like in open_position
@@ -1311,7 +1402,7 @@ def open_position_maker(
         {"status", "call": {instId, ordId, px, sCode, sMsg, state, fill_sz, avg_px, fee, fill_time}, "put": {...}}
         state is "filled" | "partially_filled" | "timeout" (still resting) | "cancelled"
     """
-
+ 
     logger.info(
         "[chase] open_position_maker started — "
         f"call_instId: {call_instId}, put_instId: {put_instId}, "
@@ -1319,7 +1410,8 @@ def open_position_maker(
         f"direction: {direction}, flag: {flag}, "
         f"slippage: {slippage}, bid_ask_threshold: {bid_ask_threshold}, "
         f"step_down_interval: {step_down_interval}s, step_down_value: {step_down_value} tick(s), "
-        f"chase_timeout: {chase_timeout}s, post_only: {post_only}, poll_interval: {poll_interval}s"
+        f"chase_timeout: {chase_timeout}s, post_only: {post_only}, poll_interval: {poll_interval}s, "
+        f"trade_window: {trade_window_start}-{trade_window_end} UTC"
     )
  
  
@@ -1366,7 +1458,8 @@ def open_position_maker(
     try:
         for leg in legs:
             leg["tick"] = get_tick_size(publicAPI, leg["instId"])
-            anchors     = get_price_anchors(marketAPI, publicAPI, leg["instId"], bid_ask_threshold)
+            anchors     = get_price_anchors(marketAPI, publicAPI, leg["instId"], bid_ask_threshold,
+                                            trade_window_start, trade_window_end)
             bounds      = compute_chase_bounds(anchors, slippage, direction, leg["tick"])
             leg["px"], leg["limit_px"] = bounds["start"], bounds["limit"]
  
@@ -1376,12 +1469,21 @@ def open_position_maker(
                 [v for v in (anchors["mid"], anchors["mark"],
                              anchors["bid"] if direction == "SHORT" else anchors["ask"]) if v]
             )
+            lt = anchors.get("last_trade")
+            if lt:
+                lt_str = (
+                    f"{px_to_str(lt['px'])} ({lt['side'] or '?'} {px_to_str(lt['sz'])} "
+                    f"@ {lt['time_utc']} UTC, {lt['trades_in_window']} trade(s) in window)"
+                )
+            else:
+                lt_str = f"N/A (no trades in {trade_window_start}-{trade_window_end} UTC today)"
             logger.info(
                 f"[chase] {leg['name']} {leg['instId']} anchors — "
                 f"bid: {px_to_str(anchors['bid'])}, ask: {px_to_str(anchors['ask'])}, "
                 f"mid: {px_to_str(anchors['mid'])}, "
                 f"mark: {px_to_str(anchors['mark']) if anchors['mark'] else 'N/A'}, "
                 f"last: {px_to_str(anchors['last']) if anchors['last'] else 'N/A'}, "
+                f"last_trade: {lt_str}, "
                 f"spread: {spread_ratio:.4%} (threshold: {bid_ask_threshold})"
             )
             logger.info(
