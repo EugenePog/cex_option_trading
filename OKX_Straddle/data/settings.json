@@ -18,8 +18,8 @@
     "okx_position_size_multiplier": 100,
     "straddle_short_strategy": {
       "run_flag": 1,
-      "check_interval": 10,
-      "slippage_tolerance": 0.04,
+      "check_interval": 20,
+      "slippage_tolerance": 0.03,
       "bid_ask_threshold": 0.1,
       "amount": 0.01,
       "timeframe_days": ["TUE", "WED", "THU", "FRI", "SAT"],
@@ -40,7 +40,7 @@
       "pricing_mode": "maker",
       "step_down_interval": 20,
       "step_down_value": 1,
-      "chase_timeout": 100,
+      "chase_timeout": 120,
       "post_only": "True"
     },
     "strangle_long_strategy": {

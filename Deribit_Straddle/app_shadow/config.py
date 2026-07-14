@@ -57,7 +57,7 @@ class Configuration:
     # to the marketable top-of-book fill (best_bid for SHORT / best_ask for LONG).
     TRADE_PRICE_FROM_WINDOW = True
     TRADE_PRICE_WINDOW_START = "08:00"   # UTC HH:MM
-    TRADE_PRICE_WINDOW_END = "08:05"     # UTC HH:MM
+    TRADE_PRICE_WINDOW_END = "08:15"     # UTC HH:MM
     TRADE_PRICE_DECIMALS = 4
 
     # Always read the REAL production market (mainnet) — this is the whole point:
