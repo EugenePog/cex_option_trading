@@ -1273,13 +1273,17 @@ def compute_chase_bounds(anchors: dict, slippage: float, direction: str, tick_sz
     with the limit rounded so rounding can never violate the bound.
     """
     if direction == "SHORT":
-        candidates = [anchors["mid"], anchors["bid"], anchors["last_trade"]]
+        candidates = [anchors["mid"], anchors["bid"]]
+        if anchors.get("last_trade"):
+            candidates.append(anchors["last_trade"]["px"])
         if anchors.get("mark"):
             candidates.append(anchors["mark"])
         limit_px = round_to_tick_dir(max(candidates) * (1 - slippage), tick_sz, "up")
         start_px = round_to_tick_dir(max(anchors["ask"], limit_px), tick_sz, "up")
     else:
-        candidates = [anchors["mid"], anchors["ask"], anchors["last_trade"]]
+        candidates = [anchors["mid"], anchors["ask"]]
+        if anchors.get("last_trade"):
+            candidates.append(anchors["last_trade"]["px"])
         if anchors.get("mark"):
             candidates.append(anchors["mark"])
         limit_px = round_to_tick_dir(min(candidates) * (1 + slippage), tick_sz, "down")
@@ -1467,6 +1471,7 @@ def open_position_maker(
             spread_ratio = abs(anchors["bid"] - anchors["ask"]) / max(anchors["bid"], anchors["ask"])
             floor_basis  = (max if direction == "SHORT" else min)(
                 [v for v in (anchors["mid"], anchors["mark"],
+                             anchors["last_trade"]["px"] if anchors.get("last_trade") else None,
                              anchors["bid"] if direction == "SHORT" else anchors["ask"]) if v]
             )
             lt = anchors.get("last_trade")
@@ -1491,7 +1496,7 @@ def open_position_maker(
                 f"tickSz: {leg['tick']}, sz: {px_to_str(leg['sz'])}, "
                 f"start_px: {px_to_str(leg['px'])}, "
                 f"{'floor' if direction == 'SHORT' else 'ceiling'}: {px_to_str(leg['limit_px'])} "
-                f"(= {'max' if direction == 'SHORT' else 'min'}(mid, mark, "
+                f"(= {'max' if direction == 'SHORT' else 'min'}(mid, mark, last_trade, "
                 f"{'bid' if direction == 'SHORT' else 'ask'}) {px_to_str(floor_basis)} "
                 f"× (1 {'-' if direction == 'SHORT' else '+'} {slippage})), "
                 f"distance: {abs(leg['px'] - leg['limit_px']) / leg['tick']:.0f} tick(s) "
