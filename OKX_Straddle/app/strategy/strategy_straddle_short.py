@@ -6,6 +6,24 @@ from app.cex_api.okx_functions import open_position, open_position_maker, close_
 from app.functions import save_filled_orders_to_csv
 from app.cex_api.okx_market_functions import get_current_token_price_by_inst_id, get_iv_by_inst_id_rest
 
+def has_filled_legs(position: dict) -> bool:
+    """
+    True if at least one leg has a non-zero filled size.
+ 
+    Error-protected: tolerates position being None, status "error",
+    missing legs, and fill_sz being None / "" / "0" / numeric / string.
+    """
+    if not position or position.get("status") == "error":
+        return False
+    for leg in ("call", "put"):
+        data = position.get(leg) or {}
+        try:
+            if float(data.get("fill_sz") or 0) > 0:
+                return True
+        except (ValueError, TypeError):
+            continue
+    return False
+
 def format_position_message(position: dict, token_price: float = None, call_iv: dict = None, put_iv: dict = None) -> str:
     state_emoji = {"filled": "✅", "cancelled": "❌", "mmp_canceled": "❌", "live": "⏳", "timeout": "⏳", "partially_filled": "🔄"}
     
@@ -48,6 +66,11 @@ class StrategyStraddleShort(StrategyBase):
         # additional initialization
         self.check_interval = config["check_interval"]
 
+        # True → one cancel-sweep is owed on the next out-of-window cycle.
+        # Initialized True so a process (re)start outside the window also
+        # cleans up any orders left over from a previous run/crash.
+        self._out_of_window_cleanup_pending = True
+
     async def should_run(self) -> bool:
         return (
             is_allowed_day(self.config["timeframe_days"]) and
@@ -56,6 +79,28 @@ class StrategyStraddleShort(StrategyBase):
                 self.config["timeframe_end"]
             )
         )
+    
+    async def run(self):
+        """
+        Overrides StrategyBase.run to close the window-edge leak:
+        a maker chase that times out near timeframe_end leaves its order
+        resting on the book, and since order cancellation only happens
+        inside execute(), the order would otherwise stay live after the
+        window closes (risking a stale-price fill hours later).
+ 
+        Outside the window we run _close_all_open_orders() exactly ONCE
+        (flag-gated), then stay idle until the window re-opens.
+        """
+        if await self.should_run():
+            logger.info(f"Running strategy [{self.__class__.__name__}] for {self.token} - conditions are met ✅")
+            self._out_of_window_cleanup_pending = True   # arm cleanup for when the window closes
+            await self.execute()
+        else:
+            logger.info(f"Skipping strategy [{self.__class__.__name__}] for {self.token} - conditions to run strategy not met ❌")
+            if self._out_of_window_cleanup_pending:
+                logger.info(f"[ShortStraddle] Out-of-window cleanup — cancelling leftover open orders for {self.token}")
+                await self._close_all_open_orders()
+                self._out_of_window_cleanup_pending = False
 
     async def execute(self):
         loop = asyncio.get_event_loop()
@@ -126,8 +171,20 @@ class StrategyStraddleShort(StrategyBase):
                     "SHORT"
                 )
 
-            logger.info(f"Openned position: {position}")
-            if position and position.get("status") != "error":
+            if has_filled_legs(position):
+                logger.info(f"Openned position: {position}")
+            else:
+                # nothing filled (chase timeout / cancelled / error) — log compactly, no CSV, no Telegram
+                status = position.get("status") if isinstance(position, dict) else position
+                states = {
+                    leg: (position.get(leg) or {}).get("state")
+                    for leg in ("call", "put")
+                } if isinstance(position, dict) else {}
+                logger.info(
+                    f"No filled legs for {self.token} — skipping CSV save and notification "
+                    f"(status: {status}, states: {states})"
+                )
+            if has_filled_legs(position):
                 save_filled_orders_to_csv("StrategyStraddleShort", position, "SHORT", self.config["executed_orders_path"])
             
                 token_price = None

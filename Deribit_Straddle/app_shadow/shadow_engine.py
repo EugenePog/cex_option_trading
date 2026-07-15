@@ -226,13 +226,16 @@ def _append_order_book_csv(rows: list, path: str):
 
 
 def _load_today_order_books(path: str) -> dict:
-    """Load the EARLIEST order-book snapshot per instrument for today's date
-    (UTC) from the order-book CSV. Used so a restart still has the
-    timeframe-start book for the no-trades fallback (failure resistance)."""
+    """Load the LATEST order-book snapshot per instrument for today's date
+    (UTC) from the order-book CSV. Used so a restart still has the operative
+    book for the no-trades fallback (failure resistance). The latest row is
+    the operative one: the first snapshot is taken at timeframe_start, and it
+    is only ever re-snapshotted when it failed the spread guard — so the most
+    recent row is always the one the next fill attempt should price off."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    earliest: dict = {}
+    latest: dict = {}
     if not os.path.exists(path):
-        return earliest
+        return latest
     try:
         with open(path, newline="") as f:
             for r in csv.DictReader(f):
@@ -240,8 +243,10 @@ def _load_today_order_books(path: str) -> dict:
                 if not ts.startswith(today):
                     continue
                 inst = r.get("instrument", "")
-                if inst and (inst not in earliest or ts < earliest[inst]["timestamp"]):
-                    earliest[inst] = {
+                # `>=` so that on equal timestamps the LATER row wins
+                # (rows are appended in chronological order).
+                if inst and (inst not in latest or ts >= latest[inst]["timestamp"]):
+                    latest[inst] = {
                         "timestamp": ts,
                         "bid_price": r.get("bid_price", ""),
                         "ask_price": r.get("ask_price", ""),
@@ -250,7 +255,7 @@ def _load_today_order_books(path: str) -> dict:
                     }
     except OSError as e:
         logger.warning(f"Failed to read order-book CSV: {e}")
-    return earliest
+    return latest
 
 
 def _window_bounds_today(start_hhmm: str, end_hhmm: str) -> tuple:
@@ -353,6 +358,36 @@ class ShadowBroker:
 
     def _get_early_book(self, inst_id: str) -> dict | None:
         return self._early_books.get(inst_id)
+
+    def _refresh_order_book_snapshot(self, inst_id: str) -> dict | None:
+        """Re-snapshot the live top-of-book for one instrument, REPLACING the
+        stored snapshot and appending the new row to the CSV.
+
+        Used when the stored snapshot cannot produce a fill (missing bid/ask,
+        or spread over the threshold): the fallback then re-checks against this
+        fresh book, and — if it still fails — the next run refreshes again,
+        so the snapshot keeps updating each run until the spread condition is
+        met and the simulated trade can happen."""
+        try:
+            t = mkt.get_ticker(inst_id)
+        except ValueError as e:
+            logger.warning(f"[{inst_id}] order-book refresh failed: {e}")
+            return None
+        ts = _now_str()
+        snap = {
+            "timestamp": ts,
+            "bid_price": t.get("best_bid_price", ""),
+            "ask_price": t.get("best_ask_price", ""),
+            "bid_size": t.get("best_bid_amount", ""),
+            "ask_size": t.get("best_ask_amount", ""),
+        }
+        self._early_books[inst_id] = snap
+        _append_order_book_csv([{"instrument": inst_id, **snap}], self.order_book_csv_path)
+        logger.info(
+            f"[ORDERBOOK] refreshed {inst_id} bid={snap['bid_price']}({snap['bid_size']}) "
+            f"ask={snap['ask_price']}({snap['ask_size']}) @ {ts}"
+        )
+        return snap
 
     # ---- wait until the trade-price window has fully closed ----
     def should_wait_for_trade_window(self) -> bool:
@@ -495,15 +530,36 @@ class ShadowBroker:
 
         logger.info(f"[{inst_id}] no trades in window — falling back to {book_src}")
 
+        def _spread(b, a):
+            return abs(b - a) / max(b, a)
+
+        # If the stored snapshot can't produce a fill (missing bid/ask or
+        # spread over the threshold), REFRESH it with the current live book
+        # and re-check. If the fresh book still fails, the leg fails for this
+        # run and the next run refreshes again — the snapshot keeps updating
+        # each run until the spread condition is met.
+        if bid_px is None or ask_px is None or _spread(bid_px, ask_px) > bid_ask_threshold:
+            logger.info(
+                f"[{inst_id}] stored snapshot unusable ({book_src}) — refreshing order book"
+            )
+            fresh = self._refresh_order_book_snapshot(inst_id)
+            if fresh is not None:
+                bid_px = sf(fresh.get("bid_price"))
+                ask_px = sf(fresh.get("ask_price"))
+                book_src = f"refreshed book @ {fresh.get('timestamp')}"
+
         if bid_px is None or ask_px is None:
-            msg = f"No valid bid/ask for {inst_id} — illiquid ({book_src})"
+            msg = f"No valid bid/ask for {inst_id} — illiquid ({book_src}); will retry next run"
             logger.warning(msg)
             return self._failed_leg(inst_id, meta, "1", msg)
 
         # Same spread guard as the live app.
-        spread_ratio = abs(bid_px - ask_px) / max(bid_px, ask_px)
+        spread_ratio = _spread(bid_px, ask_px)
         if spread_ratio > bid_ask_threshold:
-            msg = f"Spread too wide for {inst_id}: {spread_ratio:.4f} > {bid_ask_threshold}"
+            msg = (
+                f"Spread too wide for {inst_id}: {spread_ratio:.4f} > {bid_ask_threshold} "
+                f"({book_src}); will retry with a fresh snapshot next run"
+            )
             logger.warning(msg)
             return self._failed_leg(inst_id, meta, "1", msg)
 

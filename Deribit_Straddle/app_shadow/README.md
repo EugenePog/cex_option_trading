@@ -21,11 +21,32 @@ order or move funds**. It is physically incapable of trading.
 - **Decision logic** (`strategy.py`): a faithful mirror of your live
   `StrategyStraddleShort` — same sizing, same allowed-strike / near-money
   selection, same day/timeframe gating.
-- **Fill model** (marketable): the whole size fills at the single top-of-book
-  price — a SHORT leg at the real `best_bid`, a LONG leg at the real `best_ask`
-  — after applying the same tradable-state and bid/ask-spread guards as the live
-  `get_option_mark_price`. This models your live limit-past-the-touch orders
-  crossing the spread.
+- **Open price** (two-tier):
+  1. **1st priority — average of real trades.** For each leg, the engine pulls
+     the REAL trades executed on that instrument within a UTC window today
+     (default `08:00–08:15`, see `config.py`) via Deribit's
+     `get_last_trades_by_instrument` (backward-paged), and uses their **average
+     price rounded to 4 decimals** as the open price. The trades used are saved
+     to `data/straddles_history_prod_shadow_real_trades.csv`.
+
+     Because this is the average over the **whole** window, the strategy **waits
+     for the window to close** before opening — it skips earlier cycles (logging
+     "waiting for trade-price window to close") and opens just after the window
+     end. **Make sure the strategy's `timeframe_end` is later than
+     `TRADE_PRICE_WINDOW_END`**, otherwise the trade window never gets used.
+  2. **Fallback — order book at `timeframe_start`.** If the completed window had
+     no trades, the leg fills at the top of book (SHORT at `best_bid`, LONG at
+     `best_ask`) taken from the order-book snapshot captured at
+     **`timeframe_start` (e.g. 08:01)** — *not* the book at window-close. Those
+     snapshots are persisted (see below) and reloaded on restart, so a crash
+     between 08:01 and open time doesn't lose the timeframe-start price.
+
+     If that snapshot fails the **spread guard** (`|bid−ask| / max(bid,ask) >
+     bid_ask_threshold`, or bid/ask missing), the snapshot is **refreshed with
+     the current live book and re-checked on every run** — each refresh is
+     appended to the order-book CSV and replaces the operative snapshot — until
+     the spread condition is met and the simulated fill happens (or the
+     timeframe ends).
 - **Fees** (`shadow_engine.py`): Deribit's real model — `0.03%` of the
   underlying (`0.0003`/contract) for maker = taker, **capped at 12.5% of the
   option premium**. Delivery fees are off by default (daily expiries are exempt;
@@ -78,6 +99,24 @@ Two row types per leg:
 Aggregate `realized_pnl_coin` over `SETTLE` rows for your shadow PnL.
 
 State lives in `data/shadow_positions.json` (survives restarts).
+
+## Output: `data/straddles_history_prod_shadow_real_trades.csv`
+When the open price comes from real trades (tier 1 above), every trade used in
+the average is logged here: `option, token, option_type, trade_time, price,
+size, iv`. This is your audit trail for how each leg's open price was derived.
+The time window and rounding are configurable in `config.py`
+(`TRADE_PRICE_WINDOW_START` / `TRADE_PRICE_WINDOW_END` / `TRADE_PRICE_DECIMALS`,
+toggle with `TRADE_PRICE_FROM_WINDOW`).
+
+## Output: `data/straddles_history_prod_shadow_order_book.csv`
+At `timeframe_start` the engine snapshots the live top-of-book for the target
+call and put and records it here: `timestamp, instrument, bid_price, ask_price,
+bid_size, ask_size`. The first snapshot per instrument per day is taken at
+`timeframe_start`; if it fails the spread guard, a **refreshed snapshot row is
+appended on each subsequent run** until the spread condition is met. On restart
+the **latest** row per instrument (today) is reloaded as the operative book.
+This is the book the **no-trades fallback** prices off, and it doubles as a
+failure-resistance record of market state at decision time.
 
 ## Output: `data/straddles_history_prod_shadow_combined.csv`
 After each settlement, a postprocessing step rebuilds this combined file, pairing
